@@ -41,11 +41,14 @@ int main (int argc, char** argv)
     snap (*editor, out.getChildFile ("1-empty.png"));
 
     processor->loadFile (audio);
-    pump (120);
+    pump (3000);
     snap (*editor, out.getChildFile ("2-analysing.png"));
+    const auto started = juce::Time::getMillisecondCounterHiRes();
 
     while (processor->getKit().status == KitState::Status::analysing)
         pump (50);
+    std::cout << "Analysis took " << juce::roundToInt (juce::Time::getMillisecondCounterHiRes() - started) / 1000 << " s: "
+              << processor->getKit().message << "\n";
     pump (2200); // let the reveal animation finish
 
     // Hit a couple of pads so their glow shows.
@@ -74,14 +77,21 @@ int main (int argc, char** argv)
     // Round-trip the project state into a fresh instance.
     juce::MemoryBlock state;
     processor->getStateInformation (state);
+    const auto restoreStart = juce::Time::getMillisecondCounterHiRes();
     auto restored = std::make_unique<KitnapAudioProcessor>();
     restored->setStateInformation (state.getData(), (int) state.getSize());
-    while (restored->getKit().status == KitState::Status::analysing)
-        pump (50);
-    int restoredPads = 0;
-    for (auto& v : restored->getKit().variations)
-        restoredPads += v.empty() ? 0 : 1;
-    std::cout << "State size " << state.getSize() / 1024 << " KB, restored pads: " << restoredPads << "\n";
+    const auto restoreMs = juce::Time::getMillisecondCounterHiRes() - restoreStart;
+
+    auto describe = [] (const KitState& k)
+    {
+        juce::String d;
+        for (auto& v : k.variations)
+            d << (int) v.size() << " ";
+        return d + "variations, " + juce::String ((int) k.hits.size()) + " hits, " + juce::String ((int) k.overview.size()) + " overview points";
+    };
+    std::cout << "State size " << state.getSize() / 1024 << " KB, restored in " << juce::roundToInt (restoreMs) << " ms\n"
+              << "  original: " << describe (processor->getKit()) << "\n"
+              << "  restored: " << describe (restored->getKit()) << "\n";
 
     editor.reset();
     return 0;

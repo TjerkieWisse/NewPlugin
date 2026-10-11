@@ -43,6 +43,13 @@ jobs:
         shell: bash
         run: ${{ matrix.test }}
 
+      - name: AI separation test
+        shell: bash
+        run: |
+          ${{ matrix.test }} --write-mix beat.wav
+          ${{ matrix.test }} --separate beat.wav beat-drums.wav
+          ${{ matrix.test }} --file beat-drums.wav
+
       - name: Upload plugins
         uses: actions/upload-artifact@v4
         with:

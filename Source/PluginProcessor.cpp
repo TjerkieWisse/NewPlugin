@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "separation/DrumSeparator.h"
 
 using namespace kitnap;
 
@@ -22,11 +23,26 @@ juce::MemoryBlock encodeWav (const DrumSample& sample)
     return block;
 }
 
-SamplePtr decodeWav (const juce::MemoryBlock& block, int hitsStacked)
+// Sounds are stored in the project as FLAC: lossless and about half the size of WAV.
+juce::MemoryBlock encodeFlac (const DrumSample& sample)
 {
-    juce::WavAudioFormat wav;
+    juce::MemoryBlock block;
+    juce::FlacAudioFormat flac;
+    auto stream = std::make_unique<juce::MemoryOutputStream> (block, false);
+    if (auto writer = std::unique_ptr<juce::AudioFormatWriter> (
+            flac.createWriterFor (stream.get(), sample.sampleRate, (unsigned int) sample.audio.getNumChannels(), 24, {}, 0)))
+    {
+        stream.release();
+        writer->writeFromAudioSampleBuffer (sample.audio, 0, sample.audio.getNumSamples());
+    }
+    return block;
+}
+
+SamplePtr decodeFlac (const juce::MemoryBlock& block, int hitsStacked)
+{
+    juce::FlacAudioFormat flac;
     std::unique_ptr<juce::AudioFormatReader> reader (
-        wav.createReaderFor (new juce::MemoryInputStream (block, false), true));
+        flac.createReaderFor (new juce::MemoryInputStream (block, false), true));
     if (reader == nullptr || reader->lengthInSamples <= 0)
         return nullptr;
 
@@ -37,6 +53,14 @@ SamplePtr decodeWav (const juce::MemoryBlock& block, int hitsStacked)
     reader->read (&sample->audio, 0, sample->audio.getNumSamples(), 0, true, true);
     return sample;
 }
+
+// The hit map, packed as fixed-size records.
+struct PackedHit
+{
+    juce::int32 position;
+    juce::int8 drumClass, secondaryClass;
+    juce::int16 strength; // 0..32767
+};
 
 juce::String titleCase (const juce::String& s)
 {
@@ -58,21 +82,23 @@ struct KitnapAudioProcessor::AnalysisOutput
     std::vector<float> overview;
     AnalysisResult result;
     std::array<int, numDrumClasses> selection {};
-    bool keepCurrentPads = false;
+    bool useAI = false, separated = false;
+    double analysisSampleRate = 44100.0;
+    juce::String separationError;
 };
 
 // Reads the dropped file and runs the analyzer on a background thread.
 class KitnapAudioProcessor::AnalysisJob : public juce::Thread
 {
 public:
-    AnalysisJob (juce::AudioFormatManager& fm, juce::File f, std::atomic<float>& p,
-                 std::array<int, numDrumClasses> selection, bool keepCurrentPads)
-        : Thread ("KITNAP analysis"), formats (fm), progress (p)
+    AnalysisJob (juce::AudioFormatManager& fm, juce::File f, std::atomic<float>& p, std::atomic<int>& st,
+                 std::array<int, numDrumClasses> selection, bool useAI)
+        : Thread ("KITNAP analysis"), formats (fm), progress (p), stage (st)
     {
         output = std::make_unique<AnalysisOutput>();
         output->file = std::move (f);
         output->selection = selection;
-        output->keepCurrentPads = keepCurrentPads;
+        output->useAI = useAI;
     }
 
     void run() override
@@ -112,8 +138,35 @@ public:
         }
         overviewReady.store (true); // the editor can draw the waveform while the analysis runs
 
-        output->result = DrumAnalyzer::analyse (audio, reader->sampleRate,
-                                                [this] (float p) { progress.store (p); },
+        // Phase 2: pull the drums out of the mix with the AI model first, then analyse only the drums.
+        // Separation takes most of the time, so it gets most of the progress bar.
+        const juce::AudioBuffer<float>* toAnalyse = &audio;
+        juce::AudioBuffer<float> drums;
+        double analysisRate = reader->sampleRate;
+        float analysisStart = 0.0f;
+
+        if (output->useAI)
+        {
+            stage.store ((int) KitState::Stage::separating);
+            drums = DrumSeparator::separate (audio, reader->sampleRate,
+                                             [this] (float p) { progress.store (0.8f * p); },
+                                             [this] { return threadShouldExit(); },
+                                             output->separationError);
+            if (threadShouldExit())
+                return;
+            if (drums.getNumSamples() > 0)
+            {
+                toAnalyse = &drums;
+                analysisRate = DrumSeparator::modelSampleRate;
+                analysisStart = 0.8f;
+                output->separated = true;
+            }
+        }
+
+        stage.store ((int) KitState::Stage::analysing);
+        output->analysisSampleRate = analysisRate;
+        output->result = DrumAnalyzer::analyse (*toAnalyse, analysisRate,
+                                                [this, analysisStart] (float p) { progress.store (analysisStart + (1.0f - analysisStart) * p); },
                                                 [this] { return threadShouldExit(); });
         output->ok = ! threadShouldExit();
     }
@@ -124,6 +177,7 @@ public:
 private:
     juce::AudioFormatManager& formats;
     std::atomic<float>& progress;
+    std::atomic<int>& stage;
 };
 
 //==============================================================================
@@ -185,26 +239,25 @@ bool KitnapAudioProcessor::canLoad (const juce::File& file) const
 
 void KitnapAudioProcessor::loadFile (const juce::File& file)
 {
-    startAnalysis (file, {}, false);
+    startAnalysis (file, {});
 }
 
-void KitnapAudioProcessor::startAnalysis (const juce::File& file, std::array<int, numDrumClasses> selection, bool keepCurrentPads)
+void KitnapAudioProcessor::startAnalysis (const juce::File& file, std::array<int, numDrumClasses> selection)
 {
     if (job != nullptr)
         job->stopThread (4000);
 
     progress.store (0.0f);
+    stage.store ((int) KitState::Stage::reading);
     kit.status = KitState::Status::analysing;
     kit.sourceName = file.getFileNameWithoutExtension();
     kit.sourceFile = file;
     kit.message = {};
-    if (! keepCurrentPads)
-    {
-        kit.hits.clear();
-        kit.overview.clear();
-    }
+    kit.hits.clear();
+    kit.overview.clear();
 
-    job = std::make_unique<AnalysisJob> (formatManager, file, progress, selection, keepCurrentPads);
+    job = std::make_unique<AnalysisJob> (formatManager, file, progress, stage, selection,
+                                         aiEnabled && DrumSeparator::isAvailable());
     job->startThread();
     sendChangeMessage();
 }
@@ -241,15 +294,15 @@ void KitnapAudioProcessor::applyAnalysis (std::unique_ptr<AnalysisOutput> output
 {
     if (! output->ok)
     {
-        kit.status = output->keepCurrentPads ? KitState::Status::ready : KitState::Status::error;
-        kit.message = output->keepCurrentPads ? juce::String ("Source file couldn't be re-read, kit restored as saved.")
-                                              : output->error;
+        kit.status = KitState::Status::error;
+        kit.message = output->error;
         sendChangeMessage();
         return;
     }
 
     kit.hits = std::move (output->result.hits);
-    kit.hitSampleRate = output->sampleRate;
+    kit.hitSampleRate = output->analysisSampleRate;
+    kit.separated = output->separated;
     kit.overview = std::move (output->overview);
     kit.sourceLengthSeconds = output->lengthSeconds;
 
@@ -257,9 +310,6 @@ void KitnapAudioProcessor::applyAnalysis (std::unique_ptr<AnalysisOutput> output
     for (int pad = 0; pad < numDrumClasses; ++pad)
     {
         auto& fresh = output->result.kit[(size_t) pad];
-        if (fresh.empty() && output->keepCurrentPads)
-            continue; // keep the sound restored from the saved project
-
         for (auto& old : kit.variations[(size_t) pad])
             retire (old);
         kit.variations[(size_t) pad].clear();
@@ -274,7 +324,9 @@ void KitnapAudioProcessor::applyAnalysis (std::unique_ptr<AnalysisOutput> output
     applySelectionToSampler();
     kit.status = KitState::Status::ready;
     kit.message = found == 0 ? juce::String ("No drums found. Try a drum loop or a track with clear drums.")
-                             : juce::String (kit.hits.size()) + " hits found";
+                             : juce::String (kit.hits.size()) + " hits found" + (kit.separated ? " (AI separated)" : "");
+    if (output->useAI && ! output->separated && output->separationError.isNotEmpty())
+        kit.message << "  (AI separation failed: " << output->separationError << ")";
     sendChangeMessage();
 }
 
@@ -286,6 +338,29 @@ void KitnapAudioProcessor::applySelectionToSampler()
         const int sel = kit.selected[(size_t) pad];
         sampler.setPadSample (pad, juce::isPositiveAndBelow (sel, (int) vars.size()) ? vars[(size_t) sel] : nullptr);
     }
+}
+
+bool KitnapAudioProcessor::isAIAvailable() const
+{
+    return DrumSeparator::isAvailable();
+}
+
+juce::String KitnapAudioProcessor::aiUnavailableReason() const
+{
+    return DrumSeparator::unavailableReason();
+}
+
+void KitnapAudioProcessor::setAIEnabled (bool shouldBeEnabled)
+{
+    if (aiEnabled == shouldBeEnabled)
+        return;
+    aiEnabled = shouldBeEnabled;
+
+    // Re-run the current track so the two versions can be compared straight away.
+    if (kit.sourceFile.existsAsFile() && kit.status != KitState::Status::empty)
+        startAnalysis (kit.sourceFile, kit.selected);
+    else
+        sendChangeMessage();
 }
 
 void KitnapAudioProcessor::selectVariation (int pad, int index)
@@ -337,20 +412,41 @@ void KitnapAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     juce::ValueTree root ("KITNAP");
     root.appendChild (apvts.copyState(), nullptr);
+    root.setProperty ("ai", aiEnabled, nullptr);
 
-    // The chosen sounds are stored in the project, so it still plays if the source file is gone.
+    // The whole analysis is stored in the project: every variation, the hit map and the waveform.
+    // Reopening a session is instant and never needs the source file or the AI again.
     juce::ValueTree kitTree ("Kit");
     kitTree.setProperty ("source", kit.sourceFile.getFullPathName(), nullptr);
     kitTree.setProperty ("name", kit.sourceName, nullptr);
+    kitTree.setProperty ("message", kit.message, nullptr);
+    kitTree.setProperty ("separated", kit.separated, nullptr);
+    kitTree.setProperty ("hitRate", kit.hitSampleRate, nullptr);
+    kitTree.setProperty ("length", kit.sourceLengthSeconds, nullptr);
+
+    if (! kit.overview.empty())
+        kitTree.setProperty ("overview", juce::MemoryBlock (kit.overview.data(), kit.overview.size() * sizeof (float)).toBase64Encoding(), nullptr);
+
+    if (! kit.hits.empty())
+    {
+        std::vector<PackedHit> packed;
+        for (auto& h : kit.hits)
+            packed.push_back ({ (juce::int32) h.position, (juce::int8) h.drumClass, (juce::int8) h.secondaryClass,
+                                (juce::int16) juce::jlimit (0, 32767, juce::roundToInt (h.strength * 32767.0f)) });
+        kitTree.setProperty ("hits", juce::MemoryBlock (packed.data(), packed.size() * sizeof (PackedHit)).toBase64Encoding(), nullptr);
+    }
+
     for (int pad = 0; pad < numDrumClasses; ++pad)
     {
         juce::ValueTree padTree ("Pad");
         padTree.setProperty ("index", pad, nullptr);
         padTree.setProperty ("selected", kit.selected[(size_t) pad], nullptr);
-        if (auto sample = sampler.getPadSample (pad))
+        for (auto& sample : kit.variations[(size_t) pad])
         {
-            padTree.setProperty ("stacked", sample->hitsStacked, nullptr);
-            padTree.setProperty ("wav", encodeWav (*sample).toBase64Encoding(), nullptr);
+            juce::ValueTree sound ("Sound");
+            sound.setProperty ("stacked", sample->hitsStacked, nullptr);
+            sound.setProperty ("flac", encodeFlac (*sample).toBase64Encoding(), nullptr);
+            padTree.appendChild (sound, nullptr);
         }
         kitTree.appendChild (padTree, nullptr);
     }
@@ -371,45 +467,72 @@ void KitnapAudioProcessor::setStateInformation (const void* data, int sizeInByte
         apvts.replaceState (params);
 
     const auto kitTree = root.getChildWithName ("Kit");
-    if (! kitTree.isValid())
-        return;
 
-    auto restore = [this, kitTree]
+    auto restore = [this, kitTree, ai = (bool) root.getProperty ("ai", true)]
     {
-        std::array<int, numDrumClasses> selection {};
+        aiEnabled = ai;
+        if (! kitTree.isValid())
+        {
+            sendChangeMessage();
+            return;
+        }
+
+        if (job != nullptr)
+            job->stopThread (4000);
+        job.reset();
+
         bool anySound = false;
         for (const auto& padTree : kitTree)
         {
             const int pad = padTree.getProperty ("index", -1);
             if (! juce::isPositiveAndBelow (pad, numDrumClasses))
                 continue;
-            selection[(size_t) pad] = padTree.getProperty ("selected", 0);
 
             for (auto& old : kit.variations[(size_t) pad])
                 retire (old);
             kit.variations[(size_t) pad].clear();
-            kit.selected[(size_t) pad] = 0;
 
-            juce::MemoryBlock block;
-            if (block.fromBase64Encoding (padTree.getProperty ("wav").toString()))
-                if (auto sample = decodeWav (block, padTree.getProperty ("stacked", 1)))
-                {
-                    kit.variations[(size_t) pad].push_back (sample);
-                    anySound = true;
-                }
+            for (const auto& sound : padTree)
+            {
+                juce::MemoryBlock block;
+                if (block.fromBase64Encoding (sound.getProperty ("flac").toString()))
+                    if (auto sample = decodeFlac (block, sound.getProperty ("stacked", 1)))
+                        kit.variations[(size_t) pad].push_back (sample);
+            }
+
+            const int count = (int) kit.variations[(size_t) pad].size();
+            kit.selected[(size_t) pad] = count > 0 ? juce::jlimit (0, count - 1, (int) padTree.getProperty ("selected", 0)) : 0;
+            anySound = anySound || count > 0;
         }
         applySelectionToSampler();
 
         kit.sourceName = kitTree.getProperty ("name").toString();
         kit.sourceFile = juce::File (kitTree.getProperty ("source").toString());
-        kit.status = anySound ? KitState::Status::ready : KitState::Status::empty;
-        kit.hits.clear();
-        kit.overview.clear();
-        sendChangeMessage();
+        kit.message = kitTree.getProperty ("message").toString();
+        kit.separated = kitTree.getProperty ("separated", false);
+        kit.hitSampleRate = kitTree.getProperty ("hitRate", 44100.0);
+        kit.sourceLengthSeconds = kitTree.getProperty ("length", 0.0);
 
-        // Re-analyse the original file in the background to bring back the waveform and all variations.
-        if (anySound && kit.sourceFile.existsAsFile())
-            startAnalysis (kit.sourceFile, selection, true);
+        kit.overview.clear();
+        juce::MemoryBlock block;
+        if (block.fromBase64Encoding (kitTree.getProperty ("overview").toString()) && block.getSize() % sizeof (float) == 0)
+        {
+            kit.overview.resize (block.getSize() / sizeof (float));
+            block.copyTo (kit.overview.data(), 0, block.getSize());
+        }
+
+        kit.hits.clear();
+        if (block.fromBase64Encoding (kitTree.getProperty ("hits").toString()) && block.getSize() % sizeof (PackedHit) == 0)
+        {
+            std::vector<PackedHit> packed (block.getSize() / sizeof (PackedHit));
+            block.copyTo (packed.data(), 0, block.getSize());
+            for (auto& p : packed)
+                if (juce::isPositiveAndBelow ((int) p.drumClass, numDrumClasses))
+                    kit.hits.push_back ({ p.position, (DrumClass) p.drumClass, p.secondaryClass, (float) p.strength / 32767.0f });
+        }
+
+        kit.status = anySound ? KitState::Status::ready : KitState::Status::empty;
+        sendChangeMessage();
     };
 
     if (juce::MessageManager::getInstance()->isThisTheMessageThread())

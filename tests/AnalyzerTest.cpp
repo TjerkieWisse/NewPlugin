@@ -4,9 +4,11 @@
 // Usage: KitnapAnalyzerTest [output-folder]      writes the extracted kit as WAVs when a folder is given
 //        KitnapAnalyzerTest --file song.wav [out] analyses a real file instead
 //        KitnapAnalyzerTest --write-mix beat.wav     just writes the synthetic test beat
+//        KitnapAnalyzerTest --separate song.mp3 drums.wav   writes the AI-separated drum stem
 
 #include <juce_audio_formats/juce_audio_formats.h>
 #include "analysis/DrumAnalyzer.h"
+#include "separation/DrumSeparator.h"
 #include <cmath>
 #include <iostream>
 #include <map>
@@ -208,8 +210,52 @@ int analyseFile (const juce::File& file, const juce::File& out)
 }
 } // namespace
 
+// Writes the AI-separated drum stem of `in` to `out` (24-bit WAV).
+int separateFile (const juce::File& in, const juce::File& out)
+{
+    if (! DrumSeparator::isAvailable())
+    {
+        std::cerr << "AI separation unavailable: " << DrumSeparator::unavailableReason() << "\n";
+        return 1;
+    }
+
+    juce::AudioFormatManager formats;
+    formats.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (in));
+    if (reader == nullptr)
+        return 1;
+    juce::AudioBuffer<float> audio ((int) reader->numChannels, (int) reader->lengthInSamples);
+    reader->read (&audio, 0, audio.getNumSamples(), 0, true, true);
+
+    const auto started = juce::Time::getMillisecondCounterHiRes();
+    juce::String error;
+    const auto drums = DrumSeparator::separate (audio, reader->sampleRate,
+                                                [] (float p) { std::cout << "\r" << juce::roundToInt (p * 100.0f) << "%" << std::flush; },
+                                                {}, error);
+    std::cout << "\nSeparated in " << juce::roundToInt (juce::Time::getMillisecondCounterHiRes() - started) << " ms\n";
+    if (drums.getNumSamples() == 0)
+    {
+        std::cerr << "Separation failed: " << error << "\n";
+        return 1;
+    }
+
+    out.deleteFile();
+    juce::WavAudioFormat wav;
+    std::unique_ptr<juce::OutputStream> stream (out.createOutputStream().release());
+    if (auto writer = std::unique_ptr<juce::AudioFormatWriter> (wav.createWriterFor (stream.get(), DrumSeparator::modelSampleRate, 2, 24, {}, 0)))
+    {
+        stream.release();
+        writer->writeFromAudioSampleBuffer (drums, 0, drums.getNumSamples());
+    }
+    return 0;
+}
+
 int main (int argc, char** argv)
 {
+    if (argc >= 4 && juce::String (argv[1]) == "--separate")
+        return separateFile (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]),
+                             juce::File::getCurrentWorkingDirectory().getChildFile (argv[3]));
+
     if (argc >= 3 && juce::String (argv[1]) == "--file")
         return analyseFile (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]),
                             argc >= 4 ? juce::File::getCurrentWorkingDirectory().getChildFile (argv[3]) : juce::File());

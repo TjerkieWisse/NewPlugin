@@ -35,6 +35,7 @@ private:
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
     void timerCallback() override;
     void refreshPads();
+    void refreshAIButton();
     void browseForFile();
     void exportKit();
     void dragPadOut (int pad);
@@ -44,7 +45,8 @@ private:
 
     WaveformView waveform;
     std::vector<std::unique_ptr<PadComponent>> pads;
-    juce::TextButton loadButton { "LOAD" }, exportButton { "EXPORT KIT" };
+    juce::TextButton loadButton { "LOAD" }, exportButton { "EXPORT KIT" }, aiButton { "AI" };
+    juce::TooltipWindow tooltips { this };
     juce::Slider volume;
     juce::AudioProcessorValueTreeState::SliderAttachment volumeAttachment;
     std::unique_ptr<juce::FileChooser> chooser;

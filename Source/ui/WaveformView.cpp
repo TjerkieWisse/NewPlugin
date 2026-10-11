@@ -78,7 +78,8 @@ void WaveformView::paint (juce::Graphics& g)
     g.setColour (kit.status == KitState::Status::error ? theme::accent : theme::textDim);
     juce::String status = kit.message;
     if (kit.status == KitState::Status::analysing)
-        status = "Kidnapping drums...  " + juce::String (juce::roundToInt (shownProgress * 100.0f)) + "%";
+        status = (processor.getStage() == KitState::Stage::separating ? "Separating drums with AI...  " : "Kidnapping drums...  ")
+                 + juce::String (juce::roundToInt (shownProgress * 100.0f)) + "%";
     else if (kit.status == KitState::Status::ready)
         status = kit.message + "   " + theme::dot() + "   click to load another";
     g.drawText (status, titleRow, juce::Justification::centredRight);
@@ -92,14 +93,15 @@ void WaveformView::paint (juce::Graphics& g)
 
     if (analysing)
     {
-        // Scanner sweeping across the song.
+        // Scanner sweeping across the song: violet while the AI separates, pink while kidnapping.
         g.reduceClipRegion (inner.withBottom (lanes.getBottom()).toNearestInt());
+        const auto scanColour = processor.getStage() == KitState::Stage::separating ? theme::forClass (DrumClass::perc) : theme::accent;
         const float x = inner.getX() + inner.getWidth() * juce::jlimit (0.0f, 1.0f, shownProgress);
-        juce::ColourGradient glow (theme::accent.withAlpha (0.0f), x - 80.0f, 0.0f,
-                                   theme::accent.withAlpha (0.35f), x, 0.0f, false);
+        juce::ColourGradient glow (scanColour.withAlpha (0.0f), x - 80.0f, 0.0f,
+                                   scanColour.withAlpha (0.35f), x, 0.0f, false);
         g.setGradientFill (glow);
         g.fillRect (juce::Rectangle<float> (x - 80.0f, inner.getY(), 80.0f, inner.getHeight() + lanes.getHeight() + 8.0f));
-        g.setColour (theme::accent);
+        g.setColour (scanColour);
         g.fillRect (juce::Rectangle<float> (x - 1.0f, inner.getY(), 2.0f, inner.getHeight() + lanes.getHeight() + 8.0f));
         return;
     }

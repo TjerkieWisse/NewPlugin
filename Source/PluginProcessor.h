@@ -9,8 +9,10 @@
 struct KitState
 {
     enum class Status { empty, analysing, ready, error };
+    enum class Stage { reading, separating, analysing };
 
     Status status = Status::empty;
+    bool separated = false; // the kit was extracted from an AI-separated drum stem
     juce::String sourceName, message;
     juce::File sourceFile;
     double sourceLengthSeconds = 0.0;
@@ -61,6 +63,13 @@ public:
     bool canLoad (const juce::File& file) const;
     const KitState& getKit() const { return kit; }
     float getProgress() const { return progress.load(); }
+    KitState::Stage getStage() const { return (KitState::Stage) stage.load(); }
+
+    // Phase 2: AI drum separation before the analysis.
+    bool isAIAvailable() const;
+    juce::String aiUnavailableReason() const;
+    bool isAIEnabled() const { return aiEnabled; }
+    void setAIEnabled (bool shouldBeEnabled);
 
     void selectVariation (int pad, int index);
     void triggerPad (int pad) { sampler.triggerFromUi (pad); }
@@ -81,7 +90,7 @@ private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
     void timerCallback() override;
     void applyAnalysis (std::unique_ptr<AnalysisOutput> output);
-    void startAnalysis (const juce::File& file, std::array<int, kitnap::numDrumClasses> selection, bool keepCurrentPads);
+    void startAnalysis (const juce::File& file, std::array<int, kitnap::numDrumClasses> selection);
     void applySelectionToSampler();
     void retire (const kitnap::SamplePtr& sample);
 
@@ -90,6 +99,8 @@ private:
     KitState kit;
     std::unique_ptr<AnalysisJob> job;
     std::atomic<float> progress { 0.0f };
+    std::atomic<int> stage { 0 };
+    bool aiEnabled = true;
 
     // Samples that a voice might still be playing; released once nobody else holds them.
     std::vector<kitnap::SamplePtr> retired;

@@ -18,6 +18,29 @@ void KitnapLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& b
 {
     auto r = button.getLocalBounds().toFloat().reduced (1.0f);
     const bool primary = button.getProperties().getWithDefault ("primary", false);
+
+    if (button.getProperties().getWithDefault ("ai", false))
+    {
+        // AI switch: glowing gradient when on, outlined when off.
+        const bool on = button.getToggleState() && button.isEnabled();
+        const auto violet = theme::forClass (DrumClass::perc), blue = theme::forClass (DrumClass::openHat);
+        if (on)
+        {
+            juce::ColourGradient fill (violet, r.getX(), 0.0f, blue, r.getRight(), 0.0f, false);
+            g.setGradientFill (fill);
+            g.setOpacity (down ? 0.8f : highlighted ? 1.0f : 0.92f);
+            g.fillRoundedRectangle (r, r.getHeight() / 2.0f);
+        }
+        else
+        {
+            g.setColour (theme::panel);
+            g.fillRoundedRectangle (r, r.getHeight() / 2.0f);
+            g.setColour ((button.isEnabled() ? violet : theme::panelEdge).withAlpha (highlighted ? 1.0f : 0.7f));
+            g.drawRoundedRectangle (r, r.getHeight() / 2.0f, 1.2f);
+        }
+        return;
+    }
+
     const auto base = primary ? theme::accent : theme::panel;
 
     g.setColour (base.withMultipliedBrightness (down ? 0.8f : highlighted ? 1.15f : 1.0f)
@@ -81,6 +104,10 @@ KitnapAudioProcessorEditor::KitnapAudioProcessorEditor (KitnapAudioProcessor& p)
         pads.push_back (std::move (pad));
     }
 
+    aiButton.getProperties().set ("ai", true);
+    aiButton.onClick = [this] { processor.setAIEnabled (! processor.isAIEnabled()); };
+    addAndMakeVisible (aiButton);
+
     loadButton.onClick = [this] { browseForFile(); };
     exportButton.onClick = [this] { exportKit(); };
     exportButton.getProperties().set ("primary", true);
@@ -95,6 +122,7 @@ KitnapAudioProcessorEditor::KitnapAudioProcessorEditor (KitnapAudioProcessor& p)
 
     processor.addChangeListener (this);
     setSize (960, 640);
+    refreshAIButton();
     refreshPads();
     waveform.kitChanged();
     lastTick = juce::Time::getMillisecondCounterHiRes();
@@ -144,6 +172,8 @@ void KitnapAudioProcessorEditor::resized()
     exportButton.setBounds (controls.removeFromRight (130));
     controls.removeFromRight (10);
     loadButton.setBounds (controls.removeFromRight (90));
+    controls.removeFromRight (10);
+    aiButton.setBounds (controls.removeFromRight (96));
     controls.removeFromRight (14);
     volume.setBounds (controls.removeFromRight (40));
 
@@ -220,8 +250,21 @@ void KitnapAudioProcessorEditor::dragPadOut (int pad)
 }
 
 //==============================================================================
+void KitnapAudioProcessorEditor::refreshAIButton()
+{
+    const bool available = processor.isAIAvailable();
+    const bool on = available && processor.isAIEnabled();
+    aiButton.setEnabled (available);
+    aiButton.setToggleState (on, juce::dontSendNotification);
+    aiButton.setButtonText (available ? (on ? "AI  ON" : "AI  OFF") : "AI  N/A");
+    aiButton.setTooltip (available ? juce::String ("AI drum separation: pulls the drums out of the mix before the kit is extracted. "
+                                                   "Much cleaner on full songs, takes about a minute.")
+                                   : "AI separation unavailable: " + processor.aiUnavailableReason());
+}
+
 void KitnapAudioProcessorEditor::changeListenerCallback (juce::ChangeBroadcaster*)
 {
+    refreshAIButton();
     refreshPads();
     waveform.kitChanged();
 }

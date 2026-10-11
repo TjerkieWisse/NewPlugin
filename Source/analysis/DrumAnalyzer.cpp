@@ -312,8 +312,12 @@ public:
         const int numBins = fftSize / 2 + 1;
         const double binHz = sr / fftSize;
         double bands[5] {};
-        double logSum = 0.0, linSum = 0.0, airAfter = 0.0, airBefore = 0.0;
-        int flatCount = 0;
+        double airAfter = 0.0, airBefore = 0.0;
+        // Third-octave bands from 300 Hz to 12 kHz, for a noisiness measure that survives the
+        // background subtraction (individual bins are often zero, whole bands rarely are).
+        constexpr int numFlatBands = 16;
+        double flatBands[numFlatBands] {};
+        int flatBins[numFlatBands] {};
         for (int b = 1; b < numBins; ++b)
         {
             const double hz = b * binHz;
@@ -326,11 +330,12 @@ public:
             const int band = hz < 120 ? 0 : hz < 300 ? 1 : hz < 2000 ? 2 : hz < 6000 ? 3 : 4;
             if (hz >= 20.0)
                 bands[band] += power;
-            if (hz >= 300.0 && hz <= std::min (12000.0, sr * 0.45))
+
+            if (hz >= 300.0 && hz < std::min (12000.0, sr * 0.45))
             {
-                logSum += std::log (power + 1e-9 * (after[(size_t) b] + 1e-12));
-                linSum += power;
-                ++flatCount;
+                const int fb = std::min (numFlatBands - 1, (int) (3.0 * std::log2 (hz / 300.0)));
+                flatBands[fb] += power;
+                ++flatBins[fb];
             }
         }
 
@@ -340,8 +345,28 @@ public:
         f.mid = (float) (bands[2] / total);
         f.presence = (float) (bands[3] / total);
         f.air = (float) (bands[4] / total);
-        if (flatCount > 0 && linSum > 0.0)
-            f.flatness = (float) (std::exp (logSum / flatCount) / (linSum / flatCount));
+
+        double densities[numFlatBands] {};
+        double maxDensity = 0.0;
+        int usedBands = 0;
+        for (int fb = 0; fb < numFlatBands; ++fb)
+            if (flatBins[fb] > 0)
+            {
+                densities[usedBands] = flatBands[fb] / flatBins[fb];
+                maxDensity = std::max (maxDensity, densities[usedBands]);
+                ++usedBands;
+            }
+        if (usedBands > 0 && maxDensity > 0.0)
+        {
+            double logSum = 0.0, linSum = 0.0;
+            for (int i = 0; i < usedBands; ++i)
+            {
+                const double d = std::max (densities[i], maxDensity * 1e-4);
+                logSum += std::log (d);
+                linSum += d;
+            }
+            f.flatness = (float) (std::exp (logSum / usedBands) / (linSum / usedBands));
+        }
         f.airRise = (float) ((airAfter + 1e-9) / (airBefore + 1e-9));
 
         f.flamPeaks = countFlams (start);
@@ -900,10 +925,50 @@ AnalysisResult DrumAnalyzer::analyse (const juce::AudioBuffer<float>& source, do
             sample.audio = std::move (stacked);
             sample.sampleRate = sr;
             sample.hitsStacked = used;
+            for (int m : cluster.members)
+                sample.sourceHits.push_back ((int) (candidates[(size_t) m] - hits.data()));
             result.kit[(size_t) c].push_back (std::move (sample));
         }
 
         report (0.6f + 0.4f * (float) (c + 1) / (float) numDrumClasses);
+    }
+
+    // In a full track every real drum repeats, so a sound made from one hit is something else.
+    if (result.hits.size() >= 50)
+        for (auto& variations : result.kit)
+            variations.erase (std::remove_if (variations.begin(), variations.end(),
+                                              [] (auto& v) { return v.sourceHits.size() < 2; }),
+                              variations.end());
+
+    // Fragments too short to be a usable drum sound (the cut landed right after the attack).
+    for (int c = 0; c < numDrumClasses; ++c)
+    {
+        if ((DrumClass) c == DrumClass::hat)
+            continue;
+        auto& variations = result.kit[(size_t) c];
+        variations.erase (std::remove_if (variations.begin(), variations.end(),
+                                          [sr] (auto& v) { return v.audio.getNumSamples() < (int) (0.04 * sr); }),
+                          variations.end());
+    }
+
+    // Nearly every track has a snare or clap. If neither repeats but percussion has a big
+    // repeating group, that group is the snare (often a dark or heavily processed one).
+    auto biggest = [&] (DrumClass dc)
+    {
+        size_t most = 0;
+        for (auto& v : result.kit[(size_t) dc])
+            most = std::max (most, v.sourceHits.size());
+        return most;
+    };
+    auto& percs = result.kit[(size_t) DrumClass::perc];
+    if (std::max (biggest (DrumClass::snare), biggest (DrumClass::clap)) < 4 && ! percs.empty()
+        && percs.front().sourceHits.size() >= 4)
+    {
+        for (int index : percs.front().sourceHits)
+            result.hits[(size_t) index].drumClass = DrumClass::snare;
+        auto& snares = result.kit[(size_t) DrumClass::snare];
+        snares.insert (snares.begin(), std::move (percs.front()));
+        percs.erase (percs.begin());
     }
 
     report (1.0f);

@@ -23,6 +23,7 @@ struct DrumSample
     juce::AudioBuffer<float> audio;
     double sampleRate = 44100.0;
     int hitsStacked = 1; // how many hits of the song were averaged into this sound
+    std::vector<int> sourceHits; // indices into AnalysisResult::hits of every hit in this group
 };
 
 // A detected hit in the source audio (used for the waveform markers).

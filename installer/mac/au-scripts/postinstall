@@ -1,0 +1,4 @@
+#!/bin/bash
+# Make Logic and GarageBand notice the new Audio Unit without a restart.
+killall -9 AudioComponentRegistrar >/dev/null 2>&1 || true
+exit 0

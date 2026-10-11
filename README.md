@@ -51,17 +51,19 @@ The whole kit (every variation, the hit map and the waveform) is saved inside yo
 
 ## Getting the plugin
 
-Every push builds macOS, Windows and Linux versions automatically. Open the repository's **Actions** tab, pick the latest run, and download `KITNAP-macOS`, `KITNAP-Windows` or `KITNAP-Linux` under *Artifacts*.
+Download the installer for your system from the repository's **Releases** page:
 
-Install by copying the plugin into your plugin folder:
+- **Windows:** `KITNAP-x.y.z-Windows-Setup.exe` installs the VST3 plugin (into `C:\Program Files\Common Files\VST3`, where FL Studio, Ableton and other DAWs look) and the standalone app, and adds an uninstaller.
+- **macOS:** `KITNAP-x.y.z-macOS.pkg` installs the VST3, the Audio Unit (Logic, GarageBand) and the standalone app. Click *Customize* to choose.
+- **Linux:** unpack `KITNAP-x.y.z-Linux.tar.gz` and run `./install.sh` (installs to `~/.vst3`, `~/.lv2` and `~/.local/bin`).
 
-| OS | VST3 | AU |
-|----|------|----|
-| macOS | `~/Library/Audio/Plug-Ins/VST3` | `~/Library/Audio/Plug-Ins/Components` |
-| Windows | `C:\Program Files\Common Files\VST3` | — |
-| Linux | `~/.vst3` | — |
+Then rescan plugins in your DAW. In FL Studio: *Options → Manage plugins → Find installed plugins*, then add KITNAP from the Channel rack.
 
-On macOS the build isn't signed yet. If the DAW refuses to load it, run `xattr -cr ~/Library/Audio/Plug-Ins/VST3/KITNAP.vst3` (and the same for `Components/KITNAP.component`).
+The installers aren't code-signed yet, so the first launch shows a warning:
+- **Windows** (SmartScreen): click *More info → Run anyway*.
+- **macOS:** if the installer is blocked, open *System Settings → Privacy & Security* and click *Open Anyway* (on older macOS, right-click the `.pkg` and choose *Open*).
+
+Every push also builds the installers and raw plugins; they're under *Artifacts* on each run in the **Actions** tab (GitHub login required, kept for 90 days). Pushing a version tag (`git tag v0.2.0 && git push origin v0.2.0`) publishes a Release with the three installers attached.
 
 ### The AI files
 
@@ -104,6 +106,7 @@ Source/
   PluginProcessor.*         loading, background analysis, saving with the project, export
   PluginEditor.*            the window
 tests/                      analyzer test and screenshot tool
+installer/                  Windows (Inno Setup), macOS (pkg) and Linux installers
 cmake/KitnapAI.cmake        downloads ONNX Runtime + model and bundles them
 ```
 

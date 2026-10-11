@@ -26,6 +26,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Version
+        shell: bash
+        run: echo "KITNAP_VERSION=$(sed -nE 's/^project\(KITNAP VERSION ([0-9.]+)\).*/\1/p' CMakeLists.txt)" >> "$GITHUB_ENV"
+
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
@@ -50,6 +54,35 @@ jobs:
           ${{ matrix.test }} --separate beat.wav beat-drums.wav
           ${{ matrix.test }} --file beat-drums.wav
 
+      - name: Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$env:KITNAP_VERSION" `
+            "/DArtefacts=$env:GITHUB_WORKSPACE\build\KITNAP_artefacts\Release" installer\windows\KITNAP.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: macOS installer
+        if: runner.os == 'macOS'
+        run: installer/mac/build-pkg.sh "$KITNAP_VERSION" build/KITNAP_artefacts/Release build/installer
+
+      - name: Linux package
+        if: runner.os == 'Linux'
+        run: |
+          staging="KITNAP-$KITNAP_VERSION-Linux"
+          mkdir -p "$staging" build/installer
+          cp -R build/KITNAP_artefacts/Release/VST3 build/KITNAP_artefacts/Release/LV2 build/KITNAP_artefacts/Release/Standalone "$staging/"
+          cp installer/linux/install.sh "$staging/"
+          tar czf "build/installer/$staging.tar.gz" "$staging"
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: KITNAP-${{ matrix.name }}-Installer
+          path: build/installer/*
+          if-no-files-found: error
+
       - name: Upload plugins
         uses: actions/upload-artifact@v4
         with:
@@ -60,3 +93,22 @@ jobs:
             build/KITNAP_artefacts/Release/LV2
             build/KITNAP_artefacts/Release/Standalone
           if-no-files-found: warn
+
+  # Pushing a tag like v0.2.0 publishes a GitHub Release with the three installers attached.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: KITNAP-*-Installer
+          path: installers
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: installers/*
+          generate_release_notes: true

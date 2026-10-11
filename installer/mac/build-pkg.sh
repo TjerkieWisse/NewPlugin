@@ -1,0 +1,47 @@
+#!/bin/bash
+# Builds the macOS installer: KITNAP-<version>-macOS.pkg with VST3, AU and the standalone app as
+# separate, optional parts.
+#
+# Usage: installer/mac/build-pkg.sh <version> [artefacts-folder] [output-folder]
+set -euo pipefail
+
+version="$1"
+artefacts="${2:-build/KITNAP_artefacts/Release}"
+output="${3:-build/installer}"
+here="$(cd "$(dirname "$0")" && pwd)"
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+mkdir -p "$output"
+
+# component <id> <bundle> <install location> [scripts folder]
+component() {
+    local id="$1" bundle="$2" location="$3" scripts="${4:-}"
+    local root="$work/$id-root"
+    mkdir -p "$root"
+    cp -R "$bundle" "$root/"
+
+    # Stop the installer from "relocating" the bundle to wherever an older copy happens to live.
+    pkgbuild --analyze --root "$root" "$work/$id.plist"
+    local i=0
+    while plutil -extract "$i" xml1 -o /dev/null "$work/$id.plist" 2>/dev/null; do
+        plutil -replace "$i.BundleIsRelocatable" -bool NO "$work/$id.plist"
+        i=$((i + 1))
+    done
+
+    local extra=()
+    if [ -n "$scripts" ]; then extra=(--scripts "$scripts"); fi
+    pkgbuild --root "$root" --component-plist "$work/$id.plist" \
+             --identifier "com.kitnapaudio.kitnap.$id" --version "$version" \
+             --install-location "$location" ${extra[@]+"${extra[@]}"} "$work/$id.pkg"
+}
+
+component vst3 "$artefacts/VST3/KITNAP.vst3" "/Library/Audio/Plug-Ins/VST3"
+component au "$artefacts/AU/KITNAP.component" "/Library/Audio/Plug-Ins/Components" "$here/au-scripts"
+component app "$artefacts/Standalone/KITNAP.app" "/Applications"
+
+sed "s/@VERSION@/$version/g" "$here/distribution.xml" > "$work/distribution.xml"
+productbuild --distribution "$work/distribution.xml" --resources "$here/resources" \
+             --package-path "$work" "$output/KITNAP-$version-macOS.pkg"
+
+echo "Built $output/KITNAP-$version-macOS.pkg"

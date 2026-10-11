@@ -3,6 +3,7 @@
 //
 // Usage: KitnapAnalyzerTest [output-folder]      writes the extracted kit as WAVs when a folder is given
 //        KitnapAnalyzerTest --file song.wav [out] analyses a real file instead
+//        KitnapAnalyzerTest --layered [output-folder]  the same with layered drums (snare + open hat, kick + hat)
 //        KitnapAnalyzerTest --write-mix beat.wav     just writes the synthetic test beat
 //        KitnapAnalyzerTest --separate song.mp3 drums.wav   writes the AI-separated drum stem
 
@@ -260,6 +261,15 @@ int main (int argc, char** argv)
         return analyseFile (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]),
                             argc >= 4 ? juce::File::getCurrentWorkingDirectory().getChildFile (argv[3]) : juce::File());
 
+    // --layered: every snare has an open hat on top and kicks land together with closed hats;
+    // the open and closed hats also play alone elsewhere, as in most real beats.
+    const bool layered = argc >= 2 && juce::String (argv[1]) == "--layered";
+    if (layered)
+    {
+        --argc;
+        ++argv;
+    }
+
     const double bpm = 120.0;
     const int step = (int) (sr * 60.0 / bpm / 4.0); // sixteenth note
     const int bars = 8;
@@ -274,6 +284,19 @@ int main (int argc, char** argv)
         {
             const int at = (bar * 16 + s) * step;
             const float humanise = 0.85f + 0.15f * (float) ((bar * 7 + s * 3) % 5) / 4.0f;
+            if (layered)
+            {
+                auto hit = [&] (const std::vector<float>& sound, float gain, DrumClass c)
+                {
+                    add (mix, sound, at, gain * humanise);
+                    truth.push_back ({ at, c });
+                };
+                if (s == 0 || s == 10) hit (kick, 0.9f, DrumClass::kick);
+                if (s == 0 || s == 2 || s == 8 || s == 10) hit (hat, 0.25f, DrumClass::hat);
+                if (s == 4 || s == 12) hit (snare, 0.7f, DrumClass::snare);
+                if (s == 4 || s == 6 || s == 12) hit (openHat, 0.2f, DrumClass::openHat);
+                continue;
+            }
             if (s == 0 || s == 10)
             {
                 add (mix, kick, at, 0.9f * humanise);
@@ -372,9 +395,32 @@ int main (int argc, char** argv)
     };
     for (auto& [drumClass, reference] : references)
     {
+        if (layered && drumClass == DrumClass::clap)
+            continue;
         auto& variations = result.kit[(size_t) drumClass];
         const float corr = variations.empty() ? 0.0f : bestCorrelation (*reference, variations.front().audio);
-        std::cout << "Similarity " << drumClassName (drumClass) << ": " << juce::String (corr, 3) << "\n";
+        std::cout << "Similarity " << drumClassName (drumClass) << ": " << juce::String (corr, 3);
+
+        // Layering: how much of the drum it was layered with is still inside the extracted sound.
+        const std::vector<float>* other = nullptr;
+        if (layered)
+            switch (drumClass)
+            {
+                case DrumClass::kick:    other = &hat; break;
+                case DrumClass::hat:     other = &kick; break;
+                case DrumClass::snare:   other = &openHat; break;
+                case DrumClass::openHat: other = &snare; break;
+                default: break;
+            }
+        if (other != nullptr && ! variations.empty())
+        {
+            const float leak = bestCorrelation (*other, variations.front().audio);
+            const float leakDb = juce::Decibels::gainToDecibels (leak, -60.0f);
+            std::cout << "  (layered drum still in it: " << juce::String (leakDb, 1) << " dB)";
+            if (leakDb > -20.0f)
+                ok = false;
+        }
+        std::cout << "\n";
         if (corr < 0.8f)
             ok = false;
     }

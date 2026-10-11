@@ -498,6 +498,262 @@ DrumClass classify (const Features& f)
     return DrumClass::perc;
 }
 
+// A second drum played at the same moment as the main one, or -1.
+int detectLayer (DrumClass primary, const Features& f)
+{
+    switch (primary)
+    {
+        case DrumClass::kick:
+            // A snare or clap on the kick adds noisy mids; a hat adds a fresh, ringing top end.
+            if (f.mid + f.presence > 0.25f && f.flatness > 0.25f)
+                return (int) (f.flamPeaks >= 3 ? DrumClass::clap : DrumClass::snare);
+            if (f.airRise > 8.0f && f.highDecaySeconds > 0.02f)
+                return (int) (f.highDecaySeconds > 0.15f ? DrumClass::openHat : DrumClass::hat);
+            return -1;
+
+        case DrumClass::snare:
+        case DrumClass::clap:
+            // A snare's own noise reaches the top end too, so only a top end that rings on
+            // well past the snare body counts as an open hat on top.
+            return f.highDecaySeconds > 0.18f ? (int) DrumClass::openHat : -1;
+
+        case DrumClass::perc:
+            if (f.airRise > 8.0f && f.highDecaySeconds > 0.02f)
+                return (int) (f.highDecaySeconds > 0.15f ? DrumClass::openHat : DrumClass::hat);
+            return -1;
+
+        case DrumClass::hat:
+        case DrumClass::openHat:
+            return f.sub > 0.25f ? (int) DrumClass::kick : -1;
+    }
+    return -1;
+}
+
+//==============================================================================
+// Finds whether a drum (the "layer", e.g. an open hat) is inside another drum's sound
+// (the "target", e.g. a snare that was always played together with it).
+class LayerDetector
+{
+public:
+    // Only content above highPassHz is compared: the layer's own range (e.g. above 2 kHz for hats).
+    LayerDetector (const juce::AudioBuffer<float>& target, const juce::AudioBuffer<float>& layer, double sr, double highPassHz)
+        : fft (order)
+    {
+        window.resize ((size_t) size);
+        for (int i = 0; i < size; ++i)
+            window[(size_t) i] = 0.5f - 0.5f * std::cos (2.0f * pi * (float) i / (float) size);
+
+        auto filtered = [&] (const juce::AudioBuffer<float>& audio)
+        {
+            auto m = mono (audio);
+            Biquad::highpass (sr, highPassHz).processZeroPhase (m.data(), (int) m.size());
+            return m;
+        };
+        targetMag = magnitudes (filtered (target));
+        layerMag = magnitudes (filtered (layer));
+        targetFrames = std::max (0, (target.getNumSamples() - size / 2) / hop);
+    }
+
+    // How much of the layer is in the target, and at what level. A drum on its own fades in its own
+    // way, so its level relative to the layer keeps changing; with the layer on top, the ratio
+    // levels off at the layer's level once the target drum has died away.
+    void estimate()
+    {
+        float peak = 0.0f;
+        for (auto& frame : layerMag)
+            for (float m : frame)
+                peak = std::max (peak, m);
+        if (peak <= 0.0f)
+            return;
+
+        std::vector<float> frameRatios;
+        for (int f = 0; f < std::min (targetFrames, (int) layerMag.size()); ++f)
+        {
+            std::vector<float> ratios;
+            for (int b = 1; b < bins; ++b)
+                if (layerMag[(size_t) f][(size_t) b] > 0.1f * peak)
+                    ratios.push_back (targetMag[(size_t) f][(size_t) b] / layerMag[(size_t) f][(size_t) b]);
+            if (ratios.size() < 4)
+                continue;
+            std::nth_element (ratios.begin(), ratios.begin() + (std::ptrdiff_t) ratios.size() / 2, ratios.end());
+            frameRatios.push_back (ratios[ratios.size() / 2]);
+        }
+        if (frameRatios.size() < 3)
+            return;
+
+        // A low percentile over time: the plateau, ignoring the frames where the target dominates.
+        std::nth_element (frameRatios.begin(), frameRatios.begin() + (std::ptrdiff_t) frameRatios.size() / 4, frameRatios.end());
+        gain = frameRatios[frameRatios.size() / 4];
+
+        // Presence: does the layer's fine spectral detail (its exact pattern of peaks and dips, the
+        // fingerprint of that particular sample) show up in the target? Each spectrum is compared
+        // after removing its smooth overall shape, so two merely similar-sounding drums don't match.
+        double weightedCorrelation = 0.0, weightSum = 0.0;
+        for (int f = 0; f < std::min (targetFrames, (int) layerMag.size()); ++f)
+        {
+            // Weight each frame by how much of it the layer could account for: where the target drum
+            // is much louder, the layer's detail is buried and says little either way.
+            double layerEnergy = 0.0, targetEnergy = 0.0;
+            std::vector<int> strong;
+            for (int b = 1; b < bins; ++b)
+                if (layerMag[(size_t) f][(size_t) b] > 0.05f * peak)
+                {
+                    strong.push_back (b);
+                    const double l = gain * layerMag[(size_t) f][(size_t) b], t = targetMag[(size_t) f][(size_t) b];
+                    layerEnergy += l * l;
+                    targetEnergy += t * t;
+                }
+            if (strong.size() < 16 || targetEnergy <= 0.0)
+                continue;
+            const double frameEnergy = std::min (1.0, layerEnergy / targetEnergy);
+            const auto t = detail (targetMag[(size_t) f], strong);
+            const auto l = detail (layerMag[(size_t) f], strong);
+            double tl = 0.0, tt = 0.0, ll = 0.0;
+            for (size_t i = 0; i < t.size(); ++i)
+            {
+                tl += t[i] * l[i];
+                tt += t[i] * t[i];
+                ll += l[i] * l[i];
+            }
+            if (tt > 0.0 && ll > 0.0)
+            {
+                weightedCorrelation += frameEnergy * tl / std::sqrt (tt * ll);
+                weightSum += frameEnergy;
+            }
+        }
+        presence = weightSum > 0.0 ? (float) (weightedCorrelation / weightSum) : 0.0f;
+    }
+
+    float getGain() const { return gain; }
+    float getPresence() const { return presence; }
+
+private:
+    static constexpr int order = 10, size = 1 << order, hop = size / 4, bins = size / 2 + 1;
+
+    // Log magnitude minus its local average (+-6 bins), at the given bins.
+    static std::vector<double> detail (const std::vector<float>& mag, const std::vector<int>& at)
+    {
+        std::vector<double> out;
+        out.reserve (at.size());
+        for (int b : at)
+        {
+            double local = 0.0;
+            int count = 0;
+            for (int k = std::max (1, b - 6); k <= std::min (bins - 1, b + 6); ++k, ++count)
+                local += std::log (mag[(size_t) k] + 1e-9);
+            out.push_back (std::log (mag[(size_t) b] + 1e-9) - local / count);
+        }
+        return out;
+    }
+
+    static std::vector<float> mono (const juce::AudioBuffer<float>& audio)
+    {
+        std::vector<float> m ((size_t) audio.getNumSamples(), 0.0f);
+        for (int ch = 0; ch < audio.getNumChannels(); ++ch)
+            for (int i = 0; i < audio.getNumSamples(); ++i)
+                m[(size_t) i] += audio.getSample (ch, i);
+        return m;
+    }
+
+    void transform (const float* x, int n, int frame, std::vector<float>& out) const
+    {
+        out.assign ((size_t) size * 2, 0.0f);
+        for (int i = 0; i < size; ++i)
+        {
+            const int idx = frame * hop + i - size / 2;
+            if (idx >= 0 && idx < n)
+                out[(size_t) i] = x[idx] * window[(size_t) i];
+        }
+        fft.performRealOnlyForwardTransform (out.data(), true);
+    }
+
+    std::vector<std::vector<float>> magnitudes (const std::vector<float>& x) const
+    {
+        const int frames = ((int) x.size() + size) / hop;
+        std::vector<std::vector<float>> result ((size_t) frames, std::vector<float> ((size_t) bins));
+        std::vector<float> spectrum;
+        for (int f = 0; f < frames; ++f)
+        {
+            transform (x.data(), (int) x.size(), f, spectrum);
+            for (int b = 0; b < bins; ++b)
+                result[(size_t) f][(size_t) b] = std::hypot (spectrum[(size_t) b * 2], spectrum[(size_t) b * 2 + 1]);
+        }
+        return result;
+    }
+
+    juce::dsp::FFT fft;
+    std::vector<float> window;
+    std::vector<std::vector<float>> targetMag, layerMag;
+    int targetFrames = 0;
+    float gain = 0.0f, presence = 0.0f;
+};
+
+// Removes the layer by subtracting its waveform. In a produced track a layered drum is the same
+// sample every time, so once lined up to the sample it cancels almost completely, while the
+// target drum (a different waveform) is left alone. Works on the raw stacks, before any filtering.
+void subtractLayer (juce::AudioBuffer<float>& target, int targetLength, const juce::AudioBuffer<float>& rawLayer,
+                    double sr, double highPassHz)
+{
+    const int n = std::min ({ targetLength, target.getNumSamples(), rawLayer.getNumSamples() });
+    const int maxLag = (int) (0.003 * sr);
+    if (n <= 2 * maxLag)
+        return;
+
+    // Only the layer's own range is subtracted (the stacks also hold bass and other music below it),
+    // and the level is fitted in that range only.
+    juce::AudioBuffer<float> layer (rawLayer), band (target);
+    for (int ch = 0; ch < layer.getNumChannels(); ++ch)
+        Biquad::highpass (sr, highPassHz).processZeroPhase (layer.getWritePointer (ch), layer.getNumSamples());
+    for (int ch = 0; ch < band.getNumChannels(); ++ch)
+        Biquad::highpass (sr, highPassHz).processZeroPhase (band.getWritePointer (ch), band.getNumSamples());
+
+    // Best alignment on the channel sums.
+    auto sum = [] (const juce::AudioBuffer<float>& b, int i)
+    {
+        float v = 0.0f;
+        for (int ch = 0; ch < b.getNumChannels(); ++ch)
+            v += b.getSample (ch, i);
+        return v;
+    };
+    int bestLag = 0;
+    double bestScore = 0.0;
+    for (int lag = -maxLag; lag <= maxLag; ++lag)
+    {
+        double cross = 0.0, energy = 0.0;
+        for (int i = maxLag; i < n - maxLag; ++i)
+        {
+            const float l = sum (layer, i - lag);
+            cross += (double) sum (band, i) * l;
+            energy += (double) l * l;
+        }
+        const double score = energy > 0.0 ? cross / std::sqrt (energy) : 0.0;
+        if (score > bestScore)
+        {
+            bestScore = score;
+            bestLag = lag;
+        }
+    }
+
+    // Least-squares level per channel, then subtract.
+    for (int ch = 0; ch < target.getNumChannels(); ++ch)
+    {
+        const float* l = layer.getReadPointer (std::min (ch, layer.getNumChannels() - 1));
+        const float* b = band.getReadPointer (ch);
+        float* t = target.getWritePointer (ch);
+        double cross = 0.0, energy = 0.0;
+        for (int i = 0; i < n; ++i)
+            if (const int j = i - bestLag; j >= 0 && j < layer.getNumSamples())
+            {
+                cross += (double) b[i] * l[j];
+                energy += (double) l[j] * l[j];
+            }
+        const float gain = energy > 0.0 ? (float) std::max (0.0, cross / energy) : 0.0f;
+        for (int i = 0; i < n; ++i)
+            if (const int j = i - bestLag; j >= 0 && j < layer.getNumSamples())
+                t[i] -= gain * l[j];
+    }
+}
+
 //==============================================================================
 // Normalised cross-correlation of two hits on a class-specific side-chain, with a small lag search.
 struct Match
@@ -702,12 +958,22 @@ AnalysisResult DrumAnalyzer::analyse (const juce::AudioBuffer<float>& source, do
         h.nextOnsetDistance = next;
         const auto features = extractor.compute (onsets[i].position, next);
         h.drumClass = classify (features);
-        const bool isHat = h.drumClass == DrumClass::hat || h.drumClass == DrumClass::openHat;
-        if (! isHat && features.airRise > 8.0f && features.highDecaySeconds > 0.02f)
-            h.secondaryClass = (int) (features.highDecaySeconds > 0.15f ? DrumClass::openHat : DrumClass::hat);
+        h.secondaryClass = detectLayer (h.drumClass, features);
         hits.push_back (h);
         result.hits.push_back ({ h.onset.position, h.drumClass, h.secondaryClass, h.onset.strength });
     }
+
+    // Every variation is first stacked raw (unfiltered, full length); layers are removed from the
+    // raw stacks, and only then is each one cleaned up, trimmed and normalised.
+    struct Pending
+    {
+        juce::AudioBuffer<float> raw;
+        int length = 0;              // where the sound will be cut
+        int used = 0;                // hits stacked
+        int layer = -1;              // the drum it is layered with in every hit used, or -1 if clean
+        std::vector<int> sourceHits;
+    };
+    std::array<std::vector<Pending>, numDrumClasses> pending;
 
     // 3 + 4 + 5. Group, stack and clean each class
     for (int c = 0; c < numDrumClasses; ++c)
@@ -847,7 +1113,6 @@ AnalysisResult DrumAnalyzer::analyse (const juce::AudioBuffer<float>& source, do
 
         for (auto& cluster : clusters)
         {
-            const auto* seedHit = candidates[(size_t) cluster.members.front()];
             juce::AudioBuffer<float> stacked (2, extractLength);
             stacked.clear();
 
@@ -875,16 +1140,49 @@ AnalysisResult DrumAnalyzer::analyse (const juce::AudioBuffer<float>& source, do
             std::nth_element (gaps.begin(), gaps.begin() + (std::ptrdiff_t) gaps.size() / 2, gaps.end());
             const int hitLength = std::max ((int) (0.02 * sr), std::min (extractLength, gaps[gaps.size() / 2] + preRoll));
 
-            const int seedPos = seedHit->onset.position;
+            // Which other drum is layered on each member. If enough members are clean, stack only those.
+            auto layerOf = [&] (int member)
+            {
+                const auto* h = candidates[(size_t) member];
+                return h->drumClass == drumClass ? h->secondaryClass : (int) h->drumClass;
+            };
+            std::vector<size_t> chosen;
+            for (size_t k = 0; k < cluster.members.size(); ++k)
+                if (layerOf (cluster.members[k]) < 0)
+                    chosen.push_back (k);
+            const bool cleanOnly = chosen.size() >= 3 && chosen.size() * 4 >= cluster.members.size();
+            if (! cleanOnly)
+            {
+                chosen.clear();
+                for (size_t k = 0; k < cluster.members.size(); ++k)
+                    chosen.push_back (k);
+            }
+
+            int layer = -1;
+            if (! cleanOnly)
+            {
+                std::array<int, numDrumClasses> counts {};
+                for (size_t k : chosen)
+                    if (const int l = layerOf (cluster.members[k]); l >= 0)
+                        ++counts[(size_t) l];
+                const auto most = std::max_element (counts.begin(), counts.end());
+                if (*most * 2 >= (int) chosen.size())
+                    layer = (int) (most - counts.begin());
+            }
+
+            const int seedPos = candidates[(size_t) cluster.members[chosen.front()]]->onset.position + cluster.lags[chosen.front()];
             const int refLength = std::min (compareLength, hitLength);
             int used = 0;
-            for (size_t k = 0; k < cluster.members.size() && used < 32; ++k)
+            for (size_t k : chosen)
             {
+                if (used >= 32)
+                    break;
                 const int start = candidates[(size_t) cluster.members[k]]->onset.position + cluster.lags[k] - preRoll;
                 if (start < 0 || start >= source.getNumSamples())
                     continue;
                 if (! single && start + hitLength > source.getNumSamples())
                     continue;
+                const int count = std::min (extractLength, source.getNumSamples() - start);
 
                 // Least-squares gain so quieter repeats line up with the loudest one.
                 double cross = 0.0, energy = 0.0;
@@ -896,13 +1194,14 @@ AnalysisResult DrumAnalyzer::analyse (const juce::AudioBuffer<float>& source, do
                     cross += (double) sideChain[(size_t) a] * sideChain[(size_t) b];
                     energy += (double) sideChain[(size_t) b] * sideChain[(size_t) b];
                 }
-                const float gain = k == 0 || energy <= 0.0 ? 1.0f : (float) juce::jlimit (0.25, 4.0, cross / energy);
+                const float gain = used == 0 || energy <= 0.0 ? 1.0f : (float) juce::jlimit (0.25, 4.0, cross / energy);
 
+                // The whole extract length is kept: the sound is cut later, but as a template for
+                // removing this drum from others, its full ring is useful.
                 for (int ch = 0; ch < 2; ++ch)
                 {
                     const float* src = source.getReadPointer (std::min (ch, numChannels - 1));
                     float* dst = stacked.getWritePointer (ch);
-                    const int count = std::min (hitLength, source.getNumSamples() - start);
                     for (int i = 0; i < count; ++i)
                         dst[i] += gain * src[start + i];
                 }
@@ -912,25 +1211,97 @@ AnalysisResult DrumAnalyzer::analyse (const juce::AudioBuffer<float>& source, do
                 continue;
 
             stacked.applyGain (1.0f / (float) used);
-            stacked.setSize (2, hitLength, true);
 
+            Pending p;
+            p.raw = std::move (stacked);
+            p.length = hitLength;
+            p.used = used;
+            p.layer = layer;
+            for (int m : cluster.members)
+                p.sourceHits.push_back ((int) (candidates[(size_t) m] - hits.data()));
+            pending[(size_t) c].push_back (std::move (p));
+        }
+
+        report (0.6f + 0.4f * (float) (c + 1) / (float) numDrumClasses);
+    }
+
+    // Sounds that only ever occur layered (e.g. a snare that always has an open hat on top):
+    // subtract a clean copy of the other drum, found elsewhere in the track. The layer is either
+    // known from the hits themselves, or found by testing the clean hats and snares against it.
+    auto cleanTemplate = [&] (int layerClass) -> const Pending*
+    {
+        for (auto& p : pending[(size_t) layerClass])
+            if (p.layer < 0)
+                return &p;
+        return nullptr;
+    };
+
+    for (int c = 0; c < numDrumClasses; ++c)
+    {
+        const auto drumClass = (DrumClass) c;
+        if (drumClass == DrumClass::hat || drumClass == DrumClass::openHat)
+            continue; // hats are high-passed already; their best groups are the clean ones
+
+        for (auto& p : pending[(size_t) c])
+        {
+            std::vector<int> layers;
+            if (p.layer >= 0)
+                layers.push_back (p.layer);
+            for (auto candidate : { DrumClass::openHat, DrumClass::hat })
+                if ((int) candidate != p.layer)
+                    layers.push_back ((int) candidate);
+            if (drumClass == DrumClass::kick)
+                for (auto candidate : { DrumClass::snare, DrumClass::clap })
+                    layers.push_back ((int) candidate);
+
+            for (int layer : layers)
+            {
+                const auto* layerSound = cleanTemplate (layer);
+                if (layerSound == nullptr)
+                    continue;
+
+                juce::AudioBuffer<float> target (p.raw.getNumChannels(), std::min (p.length, p.raw.getNumSamples()));
+                for (int ch = 0; ch < target.getNumChannels(); ++ch)
+                    target.copyFrom (ch, 0, p.raw, ch, 0, target.getNumSamples());
+                const bool hatLayer = layer == (int) DrumClass::hat || layer == (int) DrumClass::openHat;
+                const double highPassHz = hatLayer ? 2000.0 : 150.0;
+                LayerDetector detector (target, layerSound->raw, sr, highPassHz);
+                detector.estimate();
+                if (detector.getGain() > 0.0f && (layer == p.layer || detector.getPresence() > 0.12f))
+                {
+                    subtractLayer (p.raw, p.length, layerSound->raw, sr, highPassHz);
+
+                    // Now known to be layered: show both drums for these hits.
+                    for (int index : p.sourceHits)
+                        if (result.hits[(size_t) index].secondaryClass < 0 && (int) result.hits[(size_t) index].drumClass == c)
+                            result.hits[(size_t) index].secondaryClass = layer;
+                }
+            }
+        }
+    }
+
+    // Clean up, trim and normalise every sound.
+    for (int c = 0; c < numDrumClasses; ++c)
+    {
+        const auto drumClass = (DrumClass) c;
+        for (auto& p : pending[(size_t) c])
+        {
+            auto stacked = std::move (p.raw);
+            stacked.setSize (2, std::min (p.length, stacked.getNumSamples()), true);
             cleanUp (stacked, drumClass, sr);
             const int end = std::max ((int) (0.02 * sr), findEnd (stacked, sr));
             stacked.setSize (2, std::min (end, stacked.getNumSamples()), true);
             applyFades (stacked, std::max (1, (int) (0.0003 * sr)),
-                        std::min (stacked.getNumSamples() / 2, (int) (settings.fadeOutSeconds * sr)));
+                        std::min (stacked.getNumSamples() / 2, (int) (settingsFor (drumClass).fadeOutSeconds * sr)));
             normalise (stacked);
 
             DrumSample sample;
             sample.audio = std::move (stacked);
             sample.sampleRate = sr;
-            sample.hitsStacked = used;
-            for (int m : cluster.members)
-                sample.sourceHits.push_back ((int) (candidates[(size_t) m] - hits.data()));
+            sample.hitsStacked = p.used;
+            sample.sourceHits = std::move (p.sourceHits);
             result.kit[(size_t) c].push_back (std::move (sample));
         }
-
-        report (0.6f + 0.4f * (float) (c + 1) / (float) numDrumClasses);
     }
 
     // In a full track every real drum repeats, so a sound made from one hit is something else.

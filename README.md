@@ -37,15 +37,16 @@ The whole kit (every variation, the hit map and the waveform) is saved inside yo
 1. **Find the hits.** Spectral-flux onset detection, then each hit is pinned to the sample by looking for the sharpest energy rise in three frequency bands. That way a quiet hat over a loud bass line is still placed exactly.
 2. **Name them.** For every hit it measures the energy the hit *adds* compared with just before it (so bass and chords ringing underneath are ignored): low end, mids, top, noisiness, how long the top end rings, and whether there are several quick bursts (a clap). A kick and a hat landing together counts as both.
 3. **Group them.** Hits of the same drum are compared waveform-to-waveform and grouped, so a song with two different snares gives you two variations.
-4. **Stack them.** Every hit in a group is aligned to the sample and averaged. The drum is identical every time, but the music around it isn't, so averaging cancels out much of the rest of the song. This is where the clean sound comes from: the more often a drum repeats, the cleaner it gets.
-5. **Clean up.** Each drum type gets its own filters (the kick's tail is low-passed to remove hats, hats are high-passed to remove the kick and bass), then the sound is trimmed before the next drum bleeds in, faded and normalised.
+4. **Peel off layers.** Hits where two drums land together (snare + open hat, kick + hat) are detected; each sound is preferably built only from hits where its drum plays alone. If a drum only ever occurs layered, the other drum's clean copy is checked against it by its spectral "fingerprint" (the exact pattern of peaks and dips of that sample) and, if present, its waveform is lined up to the sample and subtracted.
+5. **Stack them.** Every hit in a group is aligned to the sample and averaged. The drum is identical every time, but the music around it isn't, so averaging cancels out much of the rest of the song. This is where the clean sound comes from: the more often a drum repeats, the cleaner it gets.
+6. **Clean up.** Each drum type gets its own filters (the kick's tail is low-passed to remove hats, hats are high-passed to remove the kick and bass), then the sound is trimmed before the next drum bleeds in, faded and normalised.
 
 ### What to expect
 
 - **Full songs** come out clean thanks to the AI separation, even sample-based tracks where the music loops behind every drum hit.
 - **Drum loops, drum stems and beats with clear drums** come out very clean with the AI on or off.
 - The separation takes roughly 15 to 25 seconds per minute of audio on a typical laptop CPU.
-- Layered drums (e.g. a snare stacked with a clap) come out as the layer you hear.
+- **Layered drums** (a snare with an open hat on top, a kick with a hat) get separated: KITNAP builds each sound from the hits where that drum plays alone, and if a drum is *always* layered, it subtracts a clean copy of the other drum (taken from elsewhere in the track) sample-accurately. This needs the other drum to play alone at least a couple of times somewhere in the track. Sounds that are layered by design (a snare and clap stacked into one sample) stay as you hear them.
 
 > Sounds pulled from commercial songs are fine for practice and personal use, but clear samples before releasing music with them.
 
@@ -84,7 +85,7 @@ The plugins end up in `build/KITNAP_artefacts/Release/`. The build downloads ONN
 
 ### Tests
 
-`KitnapAnalyzerTest` builds a synthetic beat (kick, snare, clap, hats, open hat) with a bass line and chords on top, runs the analyzer, and checks that every drum is detected, classified and extracted cleanly (each extracted sound must match the original with a correlation of 0.8 or higher; currently 0.97–1.0).
+`KitnapAnalyzerTest` builds a synthetic beat (kick, snare, clap, hats, open hat) with a bass line and chords on top, runs the analyzer, and checks that every drum is detected, classified and extracted cleanly (each extracted sound must match the original with a correlation of 0.8 or higher; currently 0.97–1.0). `--layered` runs the same with every snare layered with an open hat and the kicks layered with hats; there the other drum must be at least 20 dB down in every extracted sound (currently 30–49 dB).
 
 ```bash
 ./build/KitnapAnalyzerTest_artefacts/Release/KitnapAnalyzerTest            # run the test

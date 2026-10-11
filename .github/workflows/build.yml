@@ -45,7 +45,9 @@ jobs:
 
       - name: Analyzer test
         shell: bash
-        run: ${{ matrix.test }}
+        run: |
+          ${{ matrix.test }}
+          ${{ matrix.test }} --layered
 
       - name: AI separation test
         shell: bash

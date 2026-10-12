@@ -56,6 +56,16 @@ public:
                                    const std::function<void (float)>& progress = {},
                                    const std::function<bool()>& shouldCancel = {});
 
+    // Builds the kit from a drum stem that the AI has also split into kick, snare and hi-hat stems:
+    // the kick pad comes from the kick stem, snare and clap from the snare stem, the hats from the
+    // hi-hat stem (so a hat ringing on top of a clap no longer ends up in it), and percussion from
+    // the whole drum stem. A class its own stem has none of falls back to the whole drum stem.
+    static AnalysisResult analyseParts (const juce::AudioBuffer<float>& drums, const juce::AudioBuffer<float>& kick,
+                                        const juce::AudioBuffer<float>& snare, const juce::AudioBuffer<float>& hihat,
+                                        double sampleRate,
+                                        const std::function<void (float)>& progress = {},
+                                        const std::function<bool()>& shouldCancel = {});
+
     static constexpr int maxVariationsPerClass = 8;
 };
 } // namespace kitnap

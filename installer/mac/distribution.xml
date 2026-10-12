@@ -10,6 +10,7 @@
         <line choice="vst3"/>
         <line choice="au"/>
         <line choice="app"/>
+        <line choice="split"/>
     </choices-outline>
 
     <choice id="vst3" title="VST3 plugin" description="For FL Studio, Ableton Live, Cubase, Studio One, Reaper and other VST3 hosts.">
@@ -21,8 +22,12 @@
     <choice id="app" title="Standalone app" description="Use KITNAP without a DAW.">
         <pkg-ref id="com.kitnapaudio.kitnap.app"/>
     </choice>
+    <choice id="split" title="AI drum split model" description="Splits the drums into kick, snare and hi-hat, so layered drums come out clean (440 MB).">
+        <pkg-ref id="com.kitnapaudio.kitnap.split"/>
+    </choice>
 
     <pkg-ref id="com.kitnapaudio.kitnap.vst3" version="@VERSION@">vst3.pkg</pkg-ref>
     <pkg-ref id="com.kitnapaudio.kitnap.au" version="@VERSION@">au.pkg</pkg-ref>
     <pkg-ref id="com.kitnapaudio.kitnap.app" version="@VERSION@">app.pkg</pkg-ref>
+    <pkg-ref id="com.kitnapaudio.kitnap.split" version="@VERSION@">split.pkg</pkg-ref>
 </installer-gui-script>

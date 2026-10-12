@@ -1,13 +1,14 @@
 #!/bin/bash
-# Builds the macOS installer: KITNAP-<version>-macOS.pkg with VST3, AU and the standalone app as
-# separate, optional parts.
+# Builds the macOS installer: KITNAP-<version>-macOS.pkg with VST3, AU, the standalone app and the AI
+# drum split model as separate, optional parts.
 #
-# Usage: installer/mac/build-pkg.sh <version> [artefacts-folder] [output-folder]
+# Usage: installer/mac/build-pkg.sh <version> [artefacts-folder] [output-folder] [ai-folder]
 set -euo pipefail
 
 version="$1"
 artefacts="${2:-build/KITNAP_artefacts/Release}"
 output="${3:-build/installer}"
+ai="${4:-build/kitnap-ai}"
 here="$(cd "$(dirname "$0")" && pwd)"
 
 work="$(mktemp -d)"
@@ -29,9 +30,11 @@ component() {
         i=$((i + 1))
     done
 
+    # A plain folder (the model) has no bundles to describe.
     local extra=()
-    if [ -n "$scripts" ]; then extra=(--scripts "$scripts"); fi
-    pkgbuild --root "$root" --component-plist "$work/$id.plist" \
+    if [ "$i" -gt 0 ]; then extra+=(--component-plist "$work/$id.plist"); fi
+    if [ -n "$scripts" ]; then extra+=(--scripts "$scripts"); fi
+    pkgbuild --root "$root" \
              --identifier "com.kitnapaudio.kitnap.$id" --version "$version" \
              --install-location "$location" ${extra[@]+"${extra[@]}"} "$work/$id.pkg"
 }
@@ -39,6 +42,11 @@ component() {
 component vst3 "$artefacts/VST3/KITNAP.vst3" "/Library/Audio/Plug-Ins/VST3"
 component au "$artefacts/AU/KITNAP.component" "/Library/Audio/Plug-Ins/Components" "$here/au-scripts"
 component app "$artefacts/Standalone/KITNAP.app" "/Applications"
+
+# The drum split model is shared by the plugins and the app: /Library/Application Support/KITNAP.
+mkdir -p "$work/split-files/KITNAP"
+cp "$ai/kitnap_drumsep.onnx" "$work/split-files/KITNAP/"
+component split "$work/split-files/KITNAP" "/Library/Application Support"
 
 sed "s/@VERSION@/$version/g" "$here/distribution.xml" > "$work/distribution.xml"
 productbuild --distribution "$work/distribution.xml" --resources "$here/resources" \

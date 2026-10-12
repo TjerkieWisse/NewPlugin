@@ -257,9 +257,14 @@ void KitnapAudioProcessorEditor::refreshAIButton()
     aiButton.setEnabled (available);
     aiButton.setToggleState (on, juce::dontSendNotification);
     aiButton.setButtonText (available ? (on ? "AI  ON" : "AI  OFF") : "AI  N/A");
-    aiButton.setTooltip (available ? juce::String ("AI drum separation: pulls the drums out of the mix before the kit is extracted. "
-                                                   "Much cleaner on full songs, takes about a minute.")
-                                   : "AI separation unavailable: " + processor.aiUnavailableReason());
+    aiButton.setTooltip (! available ? "AI separation unavailable: " + processor.aiUnavailableReason()
+                         : processor.canSplitKit()
+                             ? juce::String ("AI: pulls the drums out of the mix, then splits them into kick, snare and hi-hat, "
+                                             "so every pad is built from its own drum. Much cleaner on full songs; "
+                                             "takes a few minutes per song.")
+                             : juce::String ("AI drum separation: pulls the drums out of the mix before the kit is extracted. "
+                                             "Much cleaner on full songs, takes about a minute. (The drum split model "
+                                             "isn't installed, so layered drums are separated less cleanly.)"));
 }
 
 void KitnapAudioProcessorEditor::changeListenerCallback (juce::ChangeBroadcaster*)

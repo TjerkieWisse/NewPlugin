@@ -69,13 +69,64 @@ set(KITNAP_AI_AVAILABLE TRUE)
 set(KITNAP_ORT_INCLUDE_DIR "${_ort_dir}/include")
 set(KITNAP_ORT_LIBRARY "${_ort_dir}/${_ort_library}")
 
+# Drum split model: DrumSep (MDX23C) by aufr33 & jarredou, splitting the drum stem into kick, snare,
+# toms, hi-hat, ride and crash. The checkpoint is converted to ONNX at configure time, which needs
+# Python with torch, onnx, onnxruntime, pyyaml and numpy; or pass an already converted model with
+# -DKITNAP_DRUMSEP_ONNX=<file>. At 440 MB it isn't copied into every plugin: the installers put it
+# in a shared folder once (see DrumSeparator.h).
+set(KITNAP_DRUMSEP_ONNX "" CACHE FILEPATH "Already converted drum split model (kitnap_drumsep.onnx)")
+set(KITNAP_DRUMSEP_URL "https://github.com/openmirlab/mdxnet-infer/releases/download/weights-drumsep-v1/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059")
+set(KITNAP_DRUMSEP_CKPT_HASH "d2a4aa53eb584d21eead358a4e66d1882ad182911be018f052b5da73be9096d0")
+set(KITNAP_DRUMSEP_YAML_HASH "17d1649a227f841165bdb4c11a42082898192a1ea3ceab7e7e0b9293d6589dd6")
+set(KITNAP_SPLIT_MODEL_FILE "${_ai_dir}/kitnap_drumsep.onnx")
+
+if(KITNAP_WITH_DRUM_SPLIT)
+    if(KITNAP_DRUMSEP_ONNX)
+        configure_file("${KITNAP_DRUMSEP_ONNX}" "${KITNAP_SPLIT_MODEL_FILE}" COPYONLY)
+    elseif(NOT EXISTS "${KITNAP_SPLIT_MODEL_FILE}")
+        _kitnap_download("${KITNAP_DRUMSEP_URL}.ckpt" "${_ai_dir}/drumsep.ckpt" "${KITNAP_DRUMSEP_CKPT_HASH}")
+        if(NOT _kitnap_download_failed)
+            _kitnap_download("${KITNAP_DRUMSEP_URL}.yaml" "${_ai_dir}/drumsep.yaml" "${KITNAP_DRUMSEP_YAML_HASH}")
+        endif()
+        find_package(Python3 COMPONENTS Interpreter)
+        if(NOT _kitnap_download_failed AND Python3_FOUND)
+            message(STATUS "KITNAP: converting the drum split model to ONNX")
+            execute_process(
+                COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/export_drumsep.py"
+                        "${_ai_dir}/drumsep.ckpt" "${_ai_dir}/drumsep.yaml" "${KITNAP_SPLIT_MODEL_FILE}.part"
+                RESULT_VARIABLE _export_result
+                OUTPUT_VARIABLE _export_output
+                ERROR_VARIABLE _export_output)
+            if(_export_result EQUAL 0)
+                file(RENAME "${KITNAP_SPLIT_MODEL_FILE}.part" "${KITNAP_SPLIT_MODEL_FILE}")
+            else()
+                file(REMOVE "${KITNAP_SPLIT_MODEL_FILE}.part")
+                message(WARNING "KITNAP: converting the drum split model failed (pip install torch onnx onnxruntime pyyaml numpy):\n${_export_output}")
+            endif()
+        elseif(NOT Python3_FOUND)
+            message(WARNING "KITNAP: Python not found, building without the drum split model")
+        endif()
+    endif()
+endif()
+set(KITNAP_SPLIT_AVAILABLE FALSE)
+if(EXISTS "${KITNAP_SPLIT_MODEL_FILE}")
+    set(KITNAP_SPLIT_AVAILABLE TRUE)
+endif()
+
 # Copies the runtime and model into `destination` (a generator expression is fine) after `target` builds.
+# With `with_split`, the drum split model is copied too.
 function(kitnap_bundle_ai target destination)
+    cmake_parse_arguments(_bundle "WITH_SPLIT" "" "" ${ARGN})
     add_custom_command(TARGET ${target} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory "${destination}"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "${KITNAP_ORT_LIBRARY}" "${destination}/"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "${KITNAP_MODEL_FILE}" "${destination}/"
         VERBATIM)
+    if(_bundle_WITH_SPLIT AND KITNAP_SPLIT_AVAILABLE)
+        add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${KITNAP_SPLIT_MODEL_FILE}" "${destination}/"
+            VERBATIM)
+    endif()
     if(APPLE)
         # Apple Silicon only loads signed code; give the bundled runtime an ad-hoc signature.
         get_filename_component(_lib_name "${KITNAP_ORT_LIBRARY}" NAME)

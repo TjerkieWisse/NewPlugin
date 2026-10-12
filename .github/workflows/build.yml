@@ -37,8 +37,26 @@ jobs:
           sudo apt-get install -y libasound2-dev libfreetype-dev libfontconfig1-dev libx11-dev \
             libxrandr-dev libxinerama-dev libxcursor-dev libxext-dev libxcomposite-dev libgl1-mesa-dev
 
+      # Converting the AI drum split model to ONNX happens while configuring and needs PyTorch.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install model conversion tools
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            pip install torch --index-url https://download.pytorch.org/whl/cpu
+          else
+            pip install torch
+          fi
+          pip install onnx onnxruntime==1.20.1 pyyaml numpy
+
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+        shell: bash
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE="$(which python)"
+          test -f build/kitnap-ai/kitnap_drumsep.onnx
 
       - name: Build
         run: cmake --build build --config Release --parallel 4
@@ -57,18 +75,23 @@ jobs:
           ${{ matrix.test }} --separate beat.wav beat-drums.wav
           ${{ matrix.test }} --file beat-drums.wav
 
+      - name: AI drum split test
+        shell: bash
+        run: ${{ matrix.test }} --file-ai beat.wav
+
       - name: Windows installer
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           choco install innosetup --no-progress -y
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$env:KITNAP_VERSION" `
-            "/DArtefacts=$env:GITHUB_WORKSPACE\build\KITNAP_artefacts\Release" installer\windows\KITNAP.iss
+            "/DArtefacts=$env:GITHUB_WORKSPACE\build\KITNAP_artefacts\Release" `
+            "/DAIFiles=$env:GITHUB_WORKSPACE\build\kitnap-ai" installer\windows\KITNAP.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: macOS installer
         if: runner.os == 'macOS'
-        run: installer/mac/build-pkg.sh "$KITNAP_VERSION" build/KITNAP_artefacts/Release build/installer
+        run: installer/mac/build-pkg.sh "$KITNAP_VERSION" build/KITNAP_artefacts/Release build/installer build/kitnap-ai
 
       - name: Linux package
         if: runner.os == 'Linux'
@@ -76,7 +99,7 @@ jobs:
           staging="KITNAP-$KITNAP_VERSION-Linux"
           mkdir -p "$staging" build/installer
           cp -R build/KITNAP_artefacts/Release/VST3 build/KITNAP_artefacts/Release/LV2 build/KITNAP_artefacts/Release/Standalone "$staging/"
-          cp installer/linux/install.sh "$staging/"
+          cp installer/linux/install.sh build/kitnap-ai/kitnap_drumsep.onnx "$staging/"
           tar czf "build/installer/$staging.tar.gz" "$staging"
 
       - name: Upload installer

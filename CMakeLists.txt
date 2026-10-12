@@ -12,6 +12,7 @@ endif()
 
 option(KITNAP_BUILD_TESTS "Build the analyzer test" ON)
 option(KITNAP_WITH_AI "Bundle ONNX Runtime and the AI drum separation model" ON)
+option(KITNAP_WITH_DRUM_SPLIT "Convert the AI drum split model (needs Python with torch and onnx)" ON)
 option(KITNAP_BUILD_SCREENSHOT "Build the UI screenshot tool (Linux, needs a display)" OFF)
 
 # JUCE is downloaded automatically. Point KITNAP_JUCE_PATH at a local checkout to skip the download.
@@ -75,13 +76,14 @@ set(KITNAP_DEFINITIONS
     JUCE_USE_WINDOWS_MEDIA_FORMAT=1
     JUCE_VST3_CAN_REPLACE_VST2=0)
 
-# Sets up a target to use AI separation: ONNX Runtime headers, and the runtime + model copied to `resources`.
+# Sets up a target to use AI separation: ONNX Runtime headers, and the runtime + model copied to
+# `resources` (plus the drum split model with WITH_SPLIT).
 function(kitnap_use_ai target resources)
     if(KITNAP_AI_AVAILABLE)
         target_include_directories(${target} PRIVATE "${KITNAP_ORT_INCLUDE_DIR}")
         target_compile_definitions(${target} PRIVATE KITNAP_HAS_ONNX=1)
         if(resources)
-            kitnap_bundle_ai(${target} "${resources}")
+            kitnap_bundle_ai(${target} "${resources}" ${ARGN})
         endif()
     endif()
 endfunction()
@@ -116,7 +118,7 @@ if(KITNAP_BUILD_TESTS)
         Source/separation/DrumSeparator.cpp)
     target_include_directories(KitnapAnalyzerTest PRIVATE Source)
     target_compile_definitions(KitnapAnalyzerTest PRIVATE ${KITNAP_DEFINITIONS})
-    kitnap_use_ai(KitnapAnalyzerTest "$<TARGET_FILE_DIR:KitnapAnalyzerTest>/Resources")
+    kitnap_use_ai(KitnapAnalyzerTest "$<TARGET_FILE_DIR:KitnapAnalyzerTest>/Resources" WITH_SPLIT)
     target_link_libraries(KitnapAnalyzerTest
         PRIVATE
             juce::juce_audio_formats
@@ -138,7 +140,7 @@ if(KITNAP_BUILD_SCREENSHOT)
         Source/ui/WaveformView.cpp
         Source/ui/PadComponent.cpp)
     target_include_directories(KitnapScreenshot PRIVATE Source)
-    kitnap_use_ai(KitnapScreenshot "$<TARGET_FILE_DIR:KitnapScreenshot>/Resources")
+    kitnap_use_ai(KitnapScreenshot "$<TARGET_FILE_DIR:KitnapScreenshot>/Resources" WITH_SPLIT)
     target_compile_definitions(KitnapScreenshot PRIVATE ${KITNAP_DEFINITIONS} JucePlugin_Name="KITNAP"
         JUCE_STANDALONE_APPLICATION=1 JUCE_MODAL_LOOPS_PERMITTED=1)
     target_link_libraries(KitnapScreenshot PRIVATE juce::juce_audio_utils juce::juce_dsp

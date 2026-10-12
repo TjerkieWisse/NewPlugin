@@ -9,7 +9,7 @@
 struct KitState
 {
     enum class Status { empty, analysing, ready, error };
-    enum class Stage { reading, separating, analysing };
+    enum class Stage { reading, separating, splitting, analysing };
 
     Status status = Status::empty;
     bool separated = false; // the kit was extracted from an AI-separated drum stem
@@ -68,6 +68,7 @@ public:
     // Phase 2: AI drum separation before the analysis.
     bool isAIAvailable() const;
     juce::String aiUnavailableReason() const;
+    bool canSplitKit() const; // the AI can also split the drums into kick, snare and hi-hat
     bool isAIEnabled() const { return aiEnabled; }
     void setAIEnabled (bool shouldBeEnabled);
 

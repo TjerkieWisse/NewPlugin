@@ -76,9 +76,12 @@ void WaveformView::paint (juce::Graphics& g)
 
     g.setFont (theme::font (13.0f));
     g.setColour (kit.status == KitState::Status::error ? theme::accent : theme::textDim);
+    const auto stage = processor.getStage();
     juce::String status = kit.message;
     if (kit.status == KitState::Status::analysing)
-        status = (processor.getStage() == KitState::Stage::separating ? "Separating drums with AI...  " : "Kidnapping drums...  ")
+        status = juce::String (stage == KitState::Stage::separating ? "Separating drums with AI...  "
+                             : stage == KitState::Stage::splitting  ? "Splitting the kit with AI...  "
+                                                                    : "Kidnapping drums...  ")
                  + juce::String (juce::roundToInt (shownProgress * 100.0f)) + "%";
     else if (kit.status == KitState::Status::ready)
         status = kit.message + "   " + theme::dot() + "   click to load another";
@@ -93,9 +96,12 @@ void WaveformView::paint (juce::Graphics& g)
 
     if (analysing)
     {
-        // Scanner sweeping across the song: violet while the AI separates, pink while kidnapping.
+        // Scanner sweeping across the song: violet while the AI separates, cyan while it splits the kit,
+        // pink while kidnapping.
         g.reduceClipRegion (inner.withBottom (lanes.getBottom()).toNearestInt());
-        const auto scanColour = processor.getStage() == KitState::Stage::separating ? theme::forClass (DrumClass::perc) : theme::accent;
+        const auto scanColour = stage == KitState::Stage::separating ? theme::forClass (DrumClass::perc)
+                              : stage == KitState::Stage::splitting  ? theme::forClass (DrumClass::hat)
+                                                                     : theme::accent;
         const float x = inner.getX() + inner.getWidth() * juce::jlimit (0.0f, 1.0f, shownProgress);
         juce::ColourGradient glow (scanColour.withAlpha (0.0f), x - 80.0f, 0.0f,
                                    scanColour.withAlpha (0.35f), x, 0.0f, false);

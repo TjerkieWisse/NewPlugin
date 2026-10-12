@@ -7,6 +7,8 @@
 //        KitnapAnalyzerTest --layered-always [out]     ...and the open hat never plays alone
 //        KitnapAnalyzerTest --write-mix beat.wav     just writes the synthetic test beat
 //        KitnapAnalyzerTest --separate song.mp3 drums.wav   writes the AI-separated drum stem
+//        KitnapAnalyzerTest --split drums.wav folder         writes the kick, snare and hi-hat stems of a drum stem
+//        KitnapAnalyzerTest --file-ai song.mp3 [out]         the plugin's full pipeline: separate, split, analyse
 
 #include <juce_audio_formats/juce_audio_formats.h>
 #include "analysis/DrumAnalyzer.h"
@@ -253,8 +255,124 @@ int separateFile (const juce::File& in, const juce::File& out)
     return 0;
 }
 
+juce::AudioBuffer<float> readFile (const juce::File& file, double& sampleRate)
+{
+    juce::AudioFormatManager formats;
+    formats.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (file));
+    if (reader == nullptr)
+        return {};
+    juce::AudioBuffer<float> audio ((int) reader->numChannels, (int) reader->lengthInSamples);
+    reader->read (&audio, 0, audio.getNumSamples(), 0, true, true);
+    sampleRate = reader->sampleRate;
+    return audio;
+}
+
+void writeStem (const juce::AudioBuffer<float>& audio, const juce::File& file)
+{
+    file.deleteFile();
+    juce::WavAudioFormat wav;
+    std::unique_ptr<juce::OutputStream> stream (file.createOutputStream().release());
+    if (auto writer = std::unique_ptr<juce::AudioFormatWriter> (wav.createWriterFor (stream.get(), DrumSeparator::modelSampleRate,
+                                                                                    (unsigned int) audio.getNumChannels(), 24, {}, 0)))
+    {
+        stream.release();
+        writer->writeFromAudioSampleBuffer (audio, 0, audio.getNumSamples());
+    }
+}
+
+const std::vector<DrumSeparator::DrumPart> analysedParts { DrumSeparator::DrumPart::kick, DrumSeparator::DrumPart::snare,
+                                                           DrumSeparator::DrumPart::hihat };
+
+std::vector<juce::AudioBuffer<float>> splitDrums (const juce::AudioBuffer<float>& drums)
+{
+    const auto started = juce::Time::getMillisecondCounterHiRes();
+    juce::String error;
+    auto parts = DrumSeparator::split (drums, analysedParts,
+                                       [] (float p) { std::cout << "\r" << juce::roundToInt (p * 100.0f) << "%" << std::flush; },
+                                       {}, error);
+    std::cout << "\nSplit in " << juce::roundToInt (juce::Time::getMillisecondCounterHiRes() - started) << " ms\n";
+    if (parts.empty())
+        std::cerr << "Split failed: " << error << "\n";
+    return parts;
+}
+
+// --split drums.wav folder
+int splitFile (const juce::File& in, const juce::File& folder)
+{
+    if (! DrumSeparator::canSplit())
+    {
+        std::cerr << "Drum split model not found\n";
+        return 1;
+    }
+    double sr = 0.0;
+    const auto drums = readFile (in, sr);
+    if (drums.getNumSamples() == 0 || std::abs (sr - DrumSeparator::modelSampleRate) > 0.5)
+    {
+        std::cerr << "Needs a 44.1 kHz drum stem\n";
+        return 1;
+    }
+    const auto parts = splitDrums (drums);
+    if (parts.empty())
+        return 1;
+    folder.createDirectory();
+    writeStem (parts[(size_t) DrumSeparator::DrumPart::kick], folder.getChildFile ("kick.wav"));
+    writeStem (parts[(size_t) DrumSeparator::DrumPart::snare], folder.getChildFile ("snare.wav"));
+    writeStem (parts[(size_t) DrumSeparator::DrumPart::hihat], folder.getChildFile ("hihat.wav"));
+    return 0;
+}
+
+// --file-ai song [out]: what the plugin does with the AI switch on.
+int analyseFileWithAI (const juce::File& in, const juce::File& out)
+{
+    if (! DrumSeparator::canSplit())
+    {
+        std::cerr << "AI models not found: " << DrumSeparator::unavailableReason() << "\n";
+        return 1;
+    }
+    double sr = 0.0;
+    const auto audio = readFile (in, sr);
+    if (audio.getNumSamples() == 0)
+        return 1;
+
+    juce::String error;
+    const auto drums = DrumSeparator::separate (audio, sr, {}, {}, error);
+    if (drums.getNumSamples() == 0)
+    {
+        std::cerr << "Separation failed: " << error << "\n";
+        return 1;
+    }
+    const auto parts = splitDrums (drums);
+    if (parts.empty())
+        return 1;
+
+    const auto started = juce::Time::getMillisecondCounterHiRes();
+    const auto result = DrumAnalyzer::analyseParts (drums, parts[(size_t) DrumSeparator::DrumPart::kick],
+                                                    parts[(size_t) DrumSeparator::DrumPart::snare],
+                                                    parts[(size_t) DrumSeparator::DrumPart::hihat], DrumSeparator::modelSampleRate);
+    std::cout << "Analysed in " << juce::roundToInt (juce::Time::getMillisecondCounterHiRes() - started) << " ms, "
+              << result.hits.size() << " hits\n";
+    printKit (result);
+    if (out != juce::File())
+        writeKit (result, out);
+
+    // Any beat has a kick, a snare or clap, and hats.
+    auto found = [&] (DrumClass c) { return ! result.kit[(size_t) c].empty(); };
+    const bool ok = found (DrumClass::kick) && (found (DrumClass::snare) || found (DrumClass::clap)) && found (DrumClass::hat);
+    std::cout << (ok ? "PASS\n" : "FAIL: kick, snare/clap or hats missing\n");
+    return ok ? 0 : 1;
+}
+
 int main (int argc, char** argv)
 {
+    if (argc >= 4 && juce::String (argv[1]) == "--split")
+        return splitFile (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]),
+                          juce::File::getCurrentWorkingDirectory().getChildFile (argv[3]));
+
+    if (argc >= 3 && juce::String (argv[1]) == "--file-ai")
+        return analyseFileWithAI (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]),
+                                  argc >= 4 ? juce::File::getCurrentWorkingDirectory().getChildFile (argv[3]) : juce::File());
+
     if (argc >= 4 && juce::String (argv[1]) == "--separate")
         return separateFile (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]),
                              juce::File::getCurrentWorkingDirectory().getChildFile (argv[3]));

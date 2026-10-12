@@ -1,8 +1,11 @@
 #include "DrumAnalyzer.h"
 #include <juce_dsp/juce_dsp.h>
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <map>
 #include <numeric>
+#include <thread>
 
 namespace kitnap
 {
@@ -1915,6 +1918,92 @@ AnalysisResult DrumAnalyzer::analyse (const juce::AudioBuffer<float>& source, do
     }
 
     report (1.0f);
+    return result;
+}
+
+//==============================================================================
+AnalysisResult DrumAnalyzer::analyseParts (const juce::AudioBuffer<float>& drums, const juce::AudioBuffer<float>& kick,
+                                           const juce::AudioBuffer<float>& snare, const juce::AudioBuffer<float>& hihat,
+                                           double sr,
+                                           const std::function<void (float)>& progress,
+                                           const std::function<bool()>& shouldCancel)
+{
+    // The four analyses are independent: run them side by side.
+    constexpr int numSources = 4;
+    enum { whole, kickStem, snareStem, hihatStem };
+    const juce::AudioBuffer<float>* sources[numSources] { &drums, &kick, &snare, &hihat };
+    std::array<AnalysisResult, numSources> results;
+    std::array<std::atomic<float>, numSources> done {};
+    std::vector<std::thread> threads;
+    for (int i = 0; i < numSources; ++i)
+        threads.emplace_back ([&, i]
+        {
+            results[(size_t) i] = analyse (*sources[i], sr, [&, i] (float p) { done[(size_t) i].store (p); }, shouldCancel);
+            done[(size_t) i].store (1.0f);
+        });
+
+    for (;;)
+    {
+        float sum = 0.0f;
+        for (auto& d : done)
+            sum += d.load();
+        if (progress)
+            progress (sum / numSources);
+        if (sum >= (float) numSources)
+            break;
+        juce::Thread::sleep (50);
+    }
+    for (auto& t : threads)
+        t.join();
+
+    AnalysisResult result;
+    if (shouldCancel && shouldCancel())
+        return result;
+
+    // Where each class comes from.
+    std::array<int, numDrumClasses> from {};
+    from[(size_t) DrumClass::kick] = kickStem;
+    from[(size_t) DrumClass::snare] = snareStem;
+    from[(size_t) DrumClass::clap] = snareStem;
+    from[(size_t) DrumClass::hat] = hihatStem;
+    from[(size_t) DrumClass::openHat] = hihatStem;
+    from[(size_t) DrumClass::perc] = whole;
+    for (int c = 0; c < numDrumClasses; ++c)
+        if (results[(size_t) from[(size_t) c]].kit[(size_t) c].empty())
+            from[(size_t) c] = whole;
+
+    // The hits shown on the waveform: each class's hits from the analysis its sounds came from.
+    struct Origin { int source; size_t index; };
+    std::vector<Origin> kept;
+    for (int i = 0; i < numSources; ++i)
+        for (size_t h = 0; h < results[(size_t) i].hits.size(); ++h)
+            if (from[(size_t) results[(size_t) i].hits[h].drumClass] == i)
+                kept.push_back ({ i, h });
+    std::sort (kept.begin(), kept.end(), [&] (const Origin& a, const Origin& b)
+    {
+        return results[(size_t) a.source].hits[a.index].position < results[(size_t) b.source].hits[b.index].position;
+    });
+
+    std::array<std::map<size_t, int>, numSources> newIndex;
+    for (auto& o : kept)
+    {
+        newIndex[(size_t) o.source][o.index] = (int) result.hits.size();
+        result.hits.push_back (results[(size_t) o.source].hits[o.index]);
+    }
+
+    for (int c = 0; c < numDrumClasses; ++c)
+    {
+        const int source = from[(size_t) c];
+        for (auto& sample : results[(size_t) source].kit[(size_t) c])
+        {
+            std::vector<int> hits;
+            for (int h : sample.sourceHits)
+                if (auto it = newIndex[(size_t) source].find ((size_t) h); it != newIndex[(size_t) source].end())
+                    hits.push_back (it->second);
+            sample.sourceHits = std::move (hits);
+            result.kit[(size_t) c].push_back (std::move (sample));
+        }
+    }
     return result;
 }
 } // namespace kitnap

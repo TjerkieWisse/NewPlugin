@@ -82,7 +82,7 @@ struct KitnapAudioProcessor::AnalysisOutput
     std::vector<float> overview;
     AnalysisResult result;
     std::array<int, numDrumClasses> selection {};
-    bool useAI = false, separated = false;
+    bool useAI = false, separated = false, split = false;
     double analysisSampleRate = 44100.0;
     juce::String separationError;
 };
@@ -139,35 +139,61 @@ public:
         overviewReady.store (true); // the editor can draw the waveform while the analysis runs
 
         // Phase 2: pull the drums out of the mix with the AI model first, then analyse only the drums.
-        // Separation takes most of the time, so it gets most of the progress bar.
-        const juce::AudioBuffer<float>* toAnalyse = &audio;
+        // Phase 3: a second model splits the drums into kick, snare and hi-hat, and each pad is built
+        // from its own part. The two AI steps take most of the time, so they get most of the progress bar.
         juce::AudioBuffer<float> drums;
-        double analysisRate = reader->sampleRate;
-        float analysisStart = 0.0f;
+        std::vector<juce::AudioBuffer<float>> parts;
+        const bool split = output->useAI && DrumSeparator::canSplit();
+        const float separateEnd = split ? 0.2f : 0.8f, splitEnd = 0.9f;
 
         if (output->useAI)
         {
             stage.store ((int) KitState::Stage::separating);
             drums = DrumSeparator::separate (audio, reader->sampleRate,
-                                             [this] (float p) { progress.store (0.8f * p); },
+                                             [this, separateEnd] (float p) { progress.store (separateEnd * p); },
                                              [this] { return threadShouldExit(); },
                                              output->separationError);
             if (threadShouldExit())
                 return;
-            if (drums.getNumSamples() > 0)
-            {
-                toAnalyse = &drums;
-                analysisRate = DrumSeparator::modelSampleRate;
-                analysisStart = 0.8f;
-                output->separated = true;
-            }
+            output->separated = drums.getNumSamples() > 0;
+        }
+
+        if (output->separated && split)
+        {
+            stage.store ((int) KitState::Stage::splitting);
+            parts = DrumSeparator::split (drums, { DrumSeparator::DrumPart::kick, DrumSeparator::DrumPart::snare,
+                                                   DrumSeparator::DrumPart::hihat },
+                                          [this, separateEnd, splitEnd] (float p) { progress.store (separateEnd + (splitEnd - separateEnd) * p); },
+                                          [this] { return threadShouldExit(); },
+                                          output->separationError);
+            if (threadShouldExit())
+                return;
         }
 
         stage.store ((int) KitState::Stage::analysing);
-        output->analysisSampleRate = analysisRate;
-        output->result = DrumAnalyzer::analyse (*toAnalyse, analysisRate,
-                                                [this, analysisStart] (float p) { progress.store (analysisStart + (1.0f - analysisStart) * p); },
-                                                [this] { return threadShouldExit(); });
+        const float analysisStart = ! parts.empty() ? splitEnd : output->separated ? separateEnd : 0.0f;
+        auto analysisProgress = [this, analysisStart] (float p) { progress.store (analysisStart + (1.0f - analysisStart) * p); };
+        auto cancel = [this] { return threadShouldExit(); };
+
+        if (! parts.empty())
+        {
+            output->split = true;
+            output->analysisSampleRate = DrumSeparator::modelSampleRate;
+            output->result = DrumAnalyzer::analyseParts (drums, parts[(size_t) DrumSeparator::DrumPart::kick],
+                                                         parts[(size_t) DrumSeparator::DrumPart::snare],
+                                                         parts[(size_t) DrumSeparator::DrumPart::hihat],
+                                                         DrumSeparator::modelSampleRate, analysisProgress, cancel);
+        }
+        else if (output->separated)
+        {
+            output->analysisSampleRate = DrumSeparator::modelSampleRate;
+            output->result = DrumAnalyzer::analyse (drums, DrumSeparator::modelSampleRate, analysisProgress, cancel);
+        }
+        else
+        {
+            output->analysisSampleRate = reader->sampleRate;
+            output->result = DrumAnalyzer::analyse (audio, reader->sampleRate, analysisProgress, cancel);
+        }
         output->ok = ! threadShouldExit();
     }
 
@@ -324,9 +350,10 @@ void KitnapAudioProcessor::applyAnalysis (std::unique_ptr<AnalysisOutput> output
     applySelectionToSampler();
     kit.status = KitState::Status::ready;
     kit.message = found == 0 ? juce::String ("No drums found. Try a drum loop or a track with clear drums.")
-                             : juce::String (kit.hits.size()) + " hits found" + (kit.separated ? " (AI separated)" : "");
-    if (output->useAI && ! output->separated && output->separationError.isNotEmpty())
-        kit.message << "  (AI separation failed: " << output->separationError << ")";
+                             : juce::String (kit.hits.size()) + " hits found"
+                                   + (output->split ? " (AI split)" : kit.separated ? " (AI separated)" : "");
+    if (output->useAI && ! output->split && output->separationError.isNotEmpty())
+        kit.message << "  (AI " << (output->separated ? "split" : "separation") << " failed: " << output->separationError << ")";
     sendChangeMessage();
 }
 
@@ -348,6 +375,11 @@ bool KitnapAudioProcessor::isAIAvailable() const
 juce::String KitnapAudioProcessor::aiUnavailableReason() const
 {
     return DrumSeparator::unavailableReason();
+}
+
+bool KitnapAudioProcessor::canSplitKit() const
+{
+    return DrumSeparator::canSplit();
 }
 
 void KitnapAudioProcessor::setAIEnabled (bool shouldBeEnabled)

@@ -9,15 +9,29 @@ namespace kitnap
 {
 namespace
 {
-const char* modelFileName = "kitnap_drums.onnx";
+// The two models: the drum stem out of a full mix, and the drum stem into its parts.
+struct ModelSpec
+{
+    const char* fileName;
+    int fftOrder, hop;
+};
+const ModelSpec drumsModel { "kitnap_drums.onnx", 12, 1024 };
+const ModelSpec splitModel { "kitnap_drumsep.onnx", 11, 512 };
 
 juce::Array<juce::File> searchFolders()
 {
     const auto binaryFolder = juce::File::getSpecialLocation (juce::File::currentExecutableFile).getParentDirectory();
+    const auto user = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory);
+    const auto common = juce::File::getSpecialLocation (juce::File::commonApplicationDataDirectory);
+    // Next to the binary (inside the plugin bundle), then the shared folder the installer fills
+    // (C:\ProgramData\KITNAP, /Library/Application Support/KITNAP, ~/.config/KITNAP).
     return { binaryFolder.getChildFile ("Resources"),
              binaryFolder.getParentDirectory().getChildFile ("Resources"),
              binaryFolder,
-             juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile ("KITNAP") };
+             common.getChildFile ("KITNAP"),
+             common.getChildFile ("Application Support/KITNAP"),
+             user.getChildFile ("KITNAP"),
+             user.getChildFile ("Application Support/KITNAP") };
 }
 
 juce::File findFile (const juce::String& pattern)
@@ -29,7 +43,7 @@ juce::File findFile (const juce::String& pattern)
     return {};
 }
 
-juce::File findModel() { return findFile (modelFileName); }
+juce::File findModel (const ModelSpec& spec) { return findFile (spec.fileName); }
 
 juce::File findRuntimeLibrary()
 {
@@ -108,13 +122,9 @@ bool failed (const OrtApi* api, OrtStatus* status, juce::String& error)
 class Spectrogram
 {
 public:
-    static constexpr int fftOrder = 12;
-    static constexpr int fftSize = 1 << fftOrder; // 4096
-    static constexpr int hop = 1024;
-    static constexpr int numBins = fftSize / 2 + 1;
-
-    Spectrogram (int numFreqBins, int numFrames)
-        : dimF (numFreqBins), dimT (numFrames), binsF ((size_t) numFreqBins), framesT ((size_t) numFrames), fft (fftOrder)
+    Spectrogram (int fftOrder, int hopSize, int numFreqBins, int numFrames)
+        : fftSize (1 << fftOrder), hop (hopSize),
+          dimF (numFreqBins), dimT (numFrames), binsF ((size_t) numFreqBins), framesT ((size_t) numFrames), fft (fftOrder)
     {
         window.resize ((size_t) fftSize);
         for (int i = 0; i < fftSize; ++i)
@@ -197,6 +207,8 @@ public:
         }
     }
 
+    const int fftSize, hop;
+
 private:
     int dimF, dimT;
     size_t binsF, framesT; // the same, for indexing
@@ -231,8 +243,9 @@ struct Session
     char* inputName = nullptr;
     char* outputName = nullptr;
     int dimF = 0, dimT = 0;
+    size_t outputSize = 0; // floats per run: [4][dimF][dimT] times the number of stems
 
-    bool open (OrtEnv* env, const juce::File& model, juce::String& error)
+    bool open (OrtEnv* env, const juce::File& model, int maxBins, juce::String& error)
     {
         if (failed (api, api->CreateSessionOptions (&options), error)) return false;
         if (failed (api, api->SetIntraOpNumThreads (options, std::max (1, juce::SystemStats::getNumCpus() - 1)), error)) return false;
@@ -260,13 +273,28 @@ struct Session
                      && ! failed (api, api->GetDimensions (tensorInfo, dims, 4), error);
         api->ReleaseTypeInfo (typeInfo);
 
-        if (! ok || dims[1] != 4 || dims[2] <= 0 || dims[2] > Spectrogram::numBins || dims[3] <= 1)
+        if (! ok || dims[1] != 4 || dims[2] <= 0 || dims[2] > maxBins || dims[3] <= 1)
         {
             error = "Unexpected separation model format";
             return false;
         }
         dimF = (int) dims[2];
         dimT = (int) dims[3];
+
+        // The output is [batch, 4, dimF, dimT] or [batch, stems, 4, dimF, dimT].
+        if (failed (api, api->SessionGetOutputTypeInfo (session, 0, &typeInfo), error)) return false;
+        int64_t outDims[5] {};
+        const bool outOk = ! failed (api, api->CastTypeInfoToTensorInfo (typeInfo, &tensorInfo), error) && tensorInfo != nullptr
+                        && ! failed (api, api->GetDimensionsCount (tensorInfo, &numDims), error) && (numDims == 4 || numDims == 5)
+                        && ! failed (api, api->GetDimensions (tensorInfo, outDims, numDims), error);
+        api->ReleaseTypeInfo (typeInfo);
+        if (! outOk)
+        {
+            error = "Unexpected separation model format";
+            return false;
+        }
+        const int64_t stems = numDims == 5 ? std::max<int64_t> (1, outDims[1]) : 1;
+        outputSize = (size_t) stems * 4 * (size_t) dimF * (size_t) dimT;
         return true;
     }
 
@@ -287,9 +315,17 @@ struct Session
             return false;
 
         float* data = nullptr;
-        const bool gotData = ! failed (api, api->GetTensorMutableData (out, (void**) &data), error) && data != nullptr;
+        OrtTensorTypeAndShapeInfo* info = nullptr;
+        size_t count = 0;
+        const bool gotData = ! failed (api, api->GetTensorMutableData (out, (void**) &data), error) && data != nullptr
+                          && ! failed (api, api->GetTensorTypeAndShape (out, &info), error)
+                          && ! failed (api, api->GetTensorShapeElementCount (info, &count), error) && count == outputSize;
+        if (info != nullptr)
+            api->ReleaseTensorTypeAndShapeInfo (info);
         if (gotData)
-            output.assign (data, data + input.size());
+            output.assign (data, data + count);
+        else if (error.isEmpty())
+            error = "Unexpected separation model output";
         api->ReleaseValue (out);
         return gotData;
     }
@@ -326,12 +362,21 @@ bool DrumSeparator::isAvailable()
 juce::String DrumSeparator::unavailableReason()
 {
    #if KITNAP_HAS_ONNX
-    if (! findModel().existsAsFile())
+    if (! findModel (drumsModel).existsAsFile())
         return "Separation model not found";
     auto& runtime = Runtime::get();
     return runtime.api == nullptr ? runtime.error : juce::String();
    #else
     return "Built without AI separation";
+   #endif
+}
+
+bool DrumSeparator::canSplit()
+{
+   #if KITNAP_HAS_ONNX
+    return isAvailable() && findModel (splitModel).existsAsFile();
+   #else
+    return false;
    #endif
 }
 
@@ -347,7 +392,7 @@ juce::AudioBuffer<float> DrumSeparator::separate (const juce::AudioBuffer<float>
 
     auto& runtime = Runtime::get();
     Session session (runtime.api);
-    if (! session.open (runtime.env, findModel(), error))
+    if (! session.open (runtime.env, findModel (drumsModel), (1 << drumsModel.fftOrder) / 2 + 1, error))
         return {};
 
     const auto mix = resample (source, sampleRate, modelSampleRate, 2);
@@ -355,9 +400,9 @@ juce::AudioBuffer<float> DrumSeparator::separate (const juce::AudioBuffer<float>
 
     // MDX-Net chunking: each chunk is analysed whole, but only its middle part (minus `trim`
     // at both edges) is kept, so chunk borders never land in the output.
-    Spectrogram spectrogram (session.dimF, session.dimT);
+    Spectrogram spectrogram (drumsModel.fftOrder, drumsModel.hop, session.dimF, session.dimT);
     const int chunk = spectrogram.chunkLength();
-    const int trim = Spectrogram::fftSize / 2;
+    const int trim = spectrogram.fftSize / 2;
     const int keep = chunk - 2 * trim;
     const int padded = ((length + keep - 1) / keep) * keep;
 
@@ -395,6 +440,117 @@ juce::AudioBuffer<float> DrumSeparator::separate (const juce::AudioBuffer<float>
    #else
     juce::ignoreUnused (source, sampleRate, progress, shouldCancel);
     error = unavailableReason();
+    return {};
+   #endif
+}
+
+std::vector<juce::AudioBuffer<float>> DrumSeparator::split (const juce::AudioBuffer<float>& drums,
+                                                            const std::vector<DrumPart>& wanted,
+                                                            const std::function<void (float)>& progress,
+                                                            const std::function<bool()>& shouldCancel,
+                                                            juce::String& error)
+{
+   #if KITNAP_HAS_ONNX
+    if (! canSplit())
+    {
+        error = "Drum split model not found";
+        return {};
+    }
+    if (drums.getNumSamples() == 0 || drums.getNumChannels() == 0)
+        return {};
+
+    auto& runtime = Runtime::get();
+    Session session (runtime.api);
+    if (! session.open (runtime.env, findModel (splitModel), (1 << splitModel.fftOrder) / 2 + 1, error))
+        return {};
+    const int numStems = (int) (session.outputSize / ((size_t) 4 * (size_t) session.dimF * (size_t) session.dimT));
+    if (numStems != numDrumParts)
+    {
+        error = "Unexpected drum split model format";
+        return {};
+    }
+
+    Spectrogram spectrogram (splitModel.fftOrder, splitModel.hop, session.dimF, session.dimT);
+    const int chunk = spectrogram.chunkLength();
+    const int length = drums.getNumSamples();
+
+    // Chunks overlap by half and are cross-faded (each chunk's edges are its least reliable part).
+    // The song is padded with silence by a chunk on both sides so every sample is covered twice.
+    const int step = chunk / 2;
+    const int border = chunk - step;
+    const int total = border + length + border + chunk;
+    std::vector<float> padded[2];
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        padded[ch].assign ((size_t) total, 0.0f);
+        std::copy (drums.getReadPointer (std::min (ch, drums.getNumChannels() - 1)),
+                   drums.getReadPointer (std::min (ch, drums.getNumChannels() - 1)) + length, padded[ch].begin() + border);
+    }
+    std::vector<float> fade ((size_t) chunk, 1.0f);
+    for (int i = 0; i < step; ++i)
+    {
+        fade[(size_t) i] = (float) i / (float) (step - 1);
+        fade[(size_t) (chunk - 1 - i)] = fade[(size_t) i];
+    }
+
+    // Only the wanted parts are kept (a full song's stems take a lot of memory), summed straight into
+    // the output and divided by the total fade weight at the end.
+    std::vector<juce::AudioBuffer<float>> parts ((size_t) numDrumParts);
+    for (auto part : wanted)
+    {
+        parts[(size_t) part].setSize (2, length);
+        parts[(size_t) part].clear();
+    }
+    std::vector<float> weight ((size_t) total, 0.0f), input, output, stem[2];
+    const size_t stemSize = (size_t) 4 * (size_t) session.dimF * (size_t) session.dimT;
+    const int lastStart = total - chunk;
+
+    for (int start = 0; start <= lastStart; start += step)
+    {
+        if (shouldCancel && shouldCancel())
+            return {};
+
+        const float* chunkAudio[] { padded[0].data() + start, padded[1].data() + start };
+        spectrogram.forward (chunkAudio, input);
+        if (! session.run (input, output, error))
+            return {};
+
+        // The part of this chunk that lies inside the song.
+        const int from = std::max (0, border - start), to = std::min (chunk, border + length - start);
+        for (int part = 0; part < numDrumParts; ++part)
+        {
+            auto& buffer = parts[(size_t) part];
+            if (buffer.getNumSamples() == 0 || from >= to)
+                continue;
+            spectrogram.inverse (output.data() + (size_t) part * stemSize, stem);
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                float* out = buffer.getWritePointer (ch, start - border);
+                for (int i = from; i < to; ++i)
+                    out[i] += stem[ch][(size_t) i] * fade[(size_t) i];
+            }
+        }
+        for (int i = 0; i < chunk; ++i)
+            weight[(size_t) (start + i)] += fade[(size_t) i];
+
+        if (progress)
+            progress ((float) (start + step) / (float) (lastStart + step));
+    }
+
+    for (auto& buffer : parts)
+        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+        {
+            float* out = buffer.getWritePointer (ch);
+            for (int i = 0; i < length; ++i)
+            {
+                const float w = weight[(size_t) (border + i)];
+                out[i] = w > 1e-6f ? out[i] / w : 0.0f;
+            }
+        }
+    return parts;
+   #else
+    juce::ignoreUnused (drums, wanted, progress, shouldCancel);
+    error = "Built without AI separation";
     return {};
    #endif
 }

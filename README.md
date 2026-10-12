@@ -47,7 +47,7 @@ The whole kit (every variation, the hit map and the waveform) is saved inside yo
 - **Full songs** come out clean thanks to the AI separation, even sample-based tracks where the music loops behind every drum hit.
 - **Drum loops, drum stems and beats with clear drums** come out very clean with the AI on or off.
 - The separation takes roughly 15 to 25 seconds per minute of audio on a typical laptop CPU.
-- **Layered drums** (a snare with an open hat on top, a kick with a hat) get separated: KITNAP builds each sound from the hits where that drum plays alone, and if a drum is *always* layered, it subtracts a clean copy of the other drum (taken from elsewhere in the track) sample-accurately. This needs the other drum to play alone at least a couple of times somewhere in the track. Sounds that are layered by design (a snare and clap stacked into one sample) stay as you hear them.
+- **Layered drums** (a snare with an open hat on top, a kick with a hat) get separated: KITNAP builds each sound from the hits where that drum plays alone, and if a drum is *always* layered, it subtracts a clean copy of the other drum (taken from elsewhere in the track) sample-accurately. When the other drum never plays alone (e.g. an open hat that only ever lands on the clap), KITNAP models the top end as two decays: the clap's own, which fades with its body, and the slower ring of the hat. Once the clap's body has died away it fits the hat's ring, extends it back to the start and removes it, so the sizzle that keeps going after the clap is gone. The very start of the hat stays, since it lands on (and is masked by) the clap's attack. Sounds that are layered by design (a snare and clap stacked into one sample) stay as you hear them.
 
 > Sounds pulled from commercial songs are fine for practice and personal use, but clear samples before releasing music with them.
 
@@ -86,7 +86,7 @@ The plugins end up in `build/KITNAP_artefacts/Release/`. The build downloads ONN
 
 ### Tests
 
-`KitnapAnalyzerTest` builds a synthetic beat (kick, snare, clap, hats, open hat) with a bass line and chords on top, runs the analyzer, and checks that every drum is detected, classified and extracted cleanly (each extracted sound must match the original with a correlation of 0.8 or higher; currently 0.97–1.0). `--layered` runs the same with every snare layered with an open hat and the kicks layered with hats; there the other drum must be at least 20 dB down in every extracted sound (currently 30–49 dB).
+`KitnapAnalyzerTest` builds a synthetic beat (kick, snare, clap, hats, open hat) with a bass line and chords on top, runs the analyzer, and checks that every drum is detected, classified and extracted cleanly (each extracted sound must match the original with a correlation of 0.8 or higher; currently 0.97–1.0). `--layered` runs the same with every snare layered with an open hat and the kicks layered with hats; there the other drum must be at least 20 dB down in every extracted sound (currently 30–49 dB). `--layered-always` makes the open hat play only together with the snare (no clean copy exists), and checks the hat ringing on in the snare's tail.
 
 ```bash
 ./build/KitnapAnalyzerTest_artefacts/Release/KitnapAnalyzerTest            # run the test

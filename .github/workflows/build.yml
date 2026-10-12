@@ -48,6 +48,7 @@ jobs:
         run: |
           ${{ matrix.test }}
           ${{ matrix.test }} --layered
+          ${{ matrix.test }} --layered-always
 
       - name: AI separation test
         shell: bash

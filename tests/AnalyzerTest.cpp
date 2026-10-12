@@ -4,6 +4,7 @@
 // Usage: KitnapAnalyzerTest [output-folder]      writes the extracted kit as WAVs when a folder is given
 //        KitnapAnalyzerTest --file song.wav [out] analyses a real file instead
 //        KitnapAnalyzerTest --layered [output-folder]  the same with layered drums (snare + open hat, kick + hat)
+//        KitnapAnalyzerTest --layered-always [out]     ...and the open hat never plays alone
 //        KitnapAnalyzerTest --write-mix beat.wav     just writes the synthetic test beat
 //        KitnapAnalyzerTest --separate song.mp3 drums.wav   writes the AI-separated drum stem
 
@@ -134,14 +135,15 @@ struct Truth
     DrumClass drumClass;
 };
 
-float bestCorrelation (const std::vector<float>& reference, const juce::AudioBuffer<float>& extracted)
+// From `skip` samples on (to judge only the tail, after the attack).
+float bestCorrelation (const std::vector<float>& reference, const juce::AudioBuffer<float>& extracted, int skip = 0)
 {
     const int n = std::min ((int) reference.size(), extracted.getNumSamples());
     float best = 0.0f;
     for (int lag = -100; lag <= 100; ++lag)
     {
         double cross = 0, ea = 0, eb = 0;
-        for (int i = 0; i < n; ++i)
+        for (int i = skip; i < n; ++i)
         {
             const int j = i + lag;
             if (j < 0 || j >= extracted.getNumSamples())
@@ -263,7 +265,9 @@ int main (int argc, char** argv)
 
     // --layered: every snare has an open hat on top and kicks land together with closed hats;
     // the open and closed hats also play alone elsewhere, as in most real beats.
-    const bool layered = argc >= 2 && juce::String (argv[1]) == "--layered";
+    // --layered-always: the same, but the open hat never plays alone (so no clean copy of it exists).
+    const bool alwaysLayered = argc >= 2 && juce::String (argv[1]) == "--layered-always";
+    const bool layered = alwaysLayered || (argc >= 2 && juce::String (argv[1]) == "--layered");
     if (layered)
     {
         --argc;
@@ -294,7 +298,7 @@ int main (int argc, char** argv)
                 if (s == 0 || s == 10) hit (kick, 0.9f, DrumClass::kick);
                 if (s == 0 || s == 2 || s == 8 || s == 10) hit (hat, 0.25f, DrumClass::hat);
                 if (s == 4 || s == 12) hit (snare, 0.7f, DrumClass::snare);
-                if (s == 4 || s == 6 || s == 12) hit (openHat, 0.2f, DrumClass::openHat);
+                if (s == 4 || s == 12 || (s == 6 && ! alwaysLayered)) hit (openHat, 0.2f, DrumClass::openHat);
                 continue;
             }
             if (s == 0 || s == 10)
@@ -410,18 +414,26 @@ int main (int argc, char** argv)
                 case DrumClass::hat:     other = &kick; break;
                 case DrumClass::snare:   other = &openHat; break;
                 case DrumClass::openHat: other = &snare; break;
-                default: break;
+                case DrumClass::clap:
+                case DrumClass::perc:    break;
             }
+        if (alwaysLayered && drumClass == DrumClass::openHat)
+            other = nullptr; // no open hat of its own to judge
         if (other != nullptr && ! variations.empty())
         {
-            const float leak = bestCorrelation (*other, variations.front().audio);
+            // With no clean copy of the layered drum anywhere, only its ringing on can be removed (its
+            // attack lands on, and is masked by, the main drum's attack), so judge the tail.
+            const int skip = alwaysLayered ? (int) (0.05 * sr) : 0;
+            const float leak = bestCorrelation (*other, variations.front().audio, skip);
             const float leakDb = juce::Decibels::gainToDecibels (leak, -60.0f);
-            std::cout << "  (layered drum still in it: " << juce::String (leakDb, 1) << " dB)";
-            if (leakDb > -20.0f)
+            std::cout << "  (layered drum still in " << (skip > 0 ? "its tail: " : "it: ") << juce::String (leakDb, 1) << " dB)";
+            // With a clean copy elsewhere the other drum must be 20 dB down. Without one, only its
+            // ringing on can be told apart from the main drum, so the bar is lower.
+            if (leakDb > (alwaysLayered ? -13.0f : -20.0f))
                 ok = false;
         }
         std::cout << "\n";
-        if (corr < 0.8f)
+        if (corr < 0.8f && ! (alwaysLayered && drumClass == DrumClass::openHat))
             ok = false;
     }
 

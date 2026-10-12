@@ -808,8 +808,8 @@ void extendTail (juce::AudioBuffer<float>& sound, double sr, int seed, double mi
 {
     constexpr int order = 11, size = 1 << order, hop = size / 4;
     const int n = sound.getNumSamples();
-    const int span = (int) (0.03 * sr);
-    if (n < size || n < 4 * span)
+    const int span = std::min ((int) (0.03 * sr), n / 4);
+    if (n < size)
         return;
 
     auto rms = [&] (int from, int count)
@@ -906,15 +906,16 @@ void extendTail (juce::AudioBuffer<float>& sound, double sr, int seed, double mi
 }
 
 // A snare or clap's top end fades along with its body. When the top end keeps ringing well above
-// that (an open hat or shaker played on top, which no clean copy exists of), pull it down to
-// follow the body's decay. The attack is left alone. Returns true if anything was removed.
-bool tameRingingTop (juce::AudioBuffer<float>& sound, double sr)
+// that (an open hat or shaker played on top, which no clean copy exists of), remove the ringing from
+// under the drum, and end the sound where the drum's body has died away: past that point the layer
+// is all there is (the tail is then continued by extendTail). Returns the new length.
+int tameRingingTop (juce::AudioBuffer<float>& sound, double sr)
 {
     constexpr int order = 10, size = 1 << order, hop = size / 4, bins = size / 2 + 1;
     const int n = sound.getNumSamples();
     const int frames = (n + size) / hop;
     if (n < size)
-        return false;
+        return n;
 
     juce::dsp::FFT fft (order);
     std::vector<float> window ((size_t) size);
@@ -978,13 +979,13 @@ bool tameRingingTop (juce::AudioBuffer<float>& sound, double sr)
         }
     const int lastFrame = (n - size / 2) / hop; // frames past the end only see the fade
     if (quietFrame >= lastFrame - 3)
-        return false; // the body rings to the end: nothing can be told apart
+        return n; // the body rings to the end: nothing can be told apart
 
     const double bodyDecayPerFrame = 10.0 * std::log10 (bodyPeak / body[(size_t) quietFrame]) / std::max (1, quietFrame - bodyPeakFrame);
     std::vector<std::array<float, topBands>> gains ((size_t) frames);
     for (auto& g : gains)
         g.fill (1.0f);
-    bool removed = false;
+    int ringingBands = 0;
 
     for (int band = 0; band < topBands; ++band)
     {
@@ -1009,22 +1010,24 @@ bool tameRingingTop (juce::AudioBuffer<float>& sound, double sr)
         const double slope = std::min (0.0, (count * sumTY - sumT * sumY) / (count * sumTT - sumT * sumT));
         const double intercept = (sumY - slope * sumT) / count;
 
-        // A ringing layer decays clearly slower than the body (the drum's own top end fades with it;
-        // an open hat can be nearly flat over a drum's length) and is still clearly audible.
+        // A ringing layer barely decays over a drum's length (an open hat or shaker: under 100 dB per
+        // second, much slower than the body; a snare's own wires die away far quicker) and is still
+        // clearly audible.
         const double layerAtQuiet = intercept + slope * quietFrame;
-        if (-slope > 0.75 * bodyDecayPerFrame || layerAtQuiet < topPeak - 30.0)
+        const double maxLayerDecayPerFrame = std::min (0.75 * bodyDecayPerFrame, 100.0 * hop / sr);
+        if (-slope > maxLayerDecayPerFrame || layerAtQuiet < topPeak - 30.0)
             continue;
 
         for (int f = 0; f < frames; ++f)
         {
             const double layer = std::pow (10.0, (intercept + slope * std::max (f, bodyPeakFrame)) / 10.0);
             const double total = top[(size_t) f][(size_t) band];
-            gains[(size_t) f][(size_t) band] = (float) std::sqrt (std::max (0.003, 1.0 - layer / total));
+            gains[(size_t) f][(size_t) band] = (float) std::sqrt (std::max (0.01, 1.0 - layer / total));
         }
-        removed = true;
+        ++ringingBands;
     }
-    if (! removed)
-        return false;
+    if (ringingBands == 0)
+        return n;
 
     for (int ch = 0; ch < sound.getNumChannels(); ++ch)
     {
@@ -1052,7 +1055,8 @@ bool tameRingingTop (juce::AudioBuffer<float>& sound, double sr)
         for (int i = 0; i < n; ++i)
             y[i] = norm[(size_t) i] > 1e-6f ? out[(size_t) i] / norm[(size_t) i] : y[i];
     }
-    return true;
+    // Clearly ringing across the top end: past the body, the layer is all there is.
+    return ringingBands >= 2 ? std::min (n, quietFrame * hop) : n;
 }
 
 // How much the energy jumps at `position` (next 10 ms vs previous 10 ms), in dB, above highPassHz.
@@ -1779,10 +1783,10 @@ AnalysisResult DrumAnalyzer::analyse (const juce::AudioBuffer<float>& source, do
             auto stacked = std::move (p.raw);
             stacked.setSize (2, std::min (p.length, stacked.getNumSamples()), true);
             cleanUp (stacked, drumClass, sr);
-            if (drumClass == DrumClass::snare || drumClass == DrumClass::clap)
-                tameRingingTop (stacked, sr);
             const int end = std::max ((int) (0.02 * sr), findEnd (stacked, sr));
             stacked.setSize (2, std::min (end, stacked.getNumSamples()), true);
+            if (drumClass == DrumClass::snare || drumClass == DrumClass::clap)
+                stacked.setSize (2, std::max ((int) (0.02 * sr), tameRingingTop (stacked, sr)), true);
             // How fast each kind of drum dies away at the least (dB per second), so a tail measured over
             // leftover music can't ring on unnaturally.
             if (drumClass != DrumClass::kick)

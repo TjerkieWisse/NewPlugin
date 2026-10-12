@@ -806,8 +806,8 @@ void graftTail (juce::AudioBuffer<float>& sound, int& length, const juce::AudioB
 // essentially shaped noise, so the continuation sounds natural instead of chopped.
 void extendTail (juce::AudioBuffer<float>& sound, double sr, int seed, double minDecayDbPerSecond, int maxLength)
 {
-    constexpr int order = 11, size = 1 << order, hop = size / 4;
     const int n = sound.getNumSamples();
+    const int order = n >= 2048 ? 11 : 10, size = 1 << order, hop = size / 4;
     const int span = std::min ((int) (0.03 * sr), n / 4);
     if (n < size)
         return;
@@ -908,8 +908,9 @@ void extendTail (juce::AudioBuffer<float>& sound, double sr, int seed, double mi
 // A snare or clap's top end fades along with its body. When the top end keeps ringing well above
 // that (an open hat or shaker played on top, which no clean copy exists of), remove the ringing from
 // under the drum, and end the sound where the drum's body has died away: past that point the layer
-// is all there is (the tail is then continued by extendTail). Returns the new length.
-int tameRingingTop (juce::AudioBuffer<float>& sound, double sr)
+// is all there is (the tail is then continued by extendTail). Returns the new length. If `layerOut`
+// is given and the sound was cut, the removed layer is written there (the top end only).
+int tameRingingTop (juce::AudioBuffer<float>& sound, double sr, juce::AudioBuffer<float>* layerOut = nullptr)
 {
     constexpr int order = 10, size = 1 << order, hop = size / 4, bins = size / 2 + 1;
     const int n = sound.getNumSamples();
@@ -1010,11 +1011,11 @@ int tameRingingTop (juce::AudioBuffer<float>& sound, double sr)
         const double slope = std::min (0.0, (count * sumTY - sumT * sumY) / (count * sumTT - sumT * sumT));
         const double intercept = (sumY - slope * sumT) / count;
 
-        // A ringing layer barely decays over a drum's length (an open hat or shaker: under 100 dB per
-        // second, much slower than the body; a snare's own wires die away far quicker) and is still
-        // clearly audible.
+        // A ringing layer decays clearly slower than the body (an open hat or shaker; a snare or clap's
+        // own sizzle fades about as fast as its body), never faster than 300 dB per second, and is
+        // still clearly audible.
         const double layerAtQuiet = intercept + slope * quietFrame;
-        const double maxLayerDecayPerFrame = std::min (0.75 * bodyDecayPerFrame, 100.0 * hop / sr);
+        const double maxLayerDecayPerFrame = std::min (0.75 * bodyDecayPerFrame, 300.0 * hop / sr);
         if (-slope > maxLayerDecayPerFrame || layerAtQuiet < topPeak - 30.0)
             continue;
 
@@ -1029,34 +1030,51 @@ int tameRingingTop (juce::AudioBuffer<float>& sound, double sr)
     if (ringingBands == 0)
         return n;
 
+    // Clearly ringing across the top end: past the body, the layer is all there is.
+    const bool cut = ringingBands >= 2;
+    const bool keepLayer = layerOut != nullptr && cut;
+    if (layerOut != nullptr)
+        layerOut->setSize (keepLayer ? sound.getNumChannels() : 0, keepLayer ? n : 0);
+
     for (int ch = 0; ch < sound.getNumChannels(); ++ch)
     {
-        std::vector<float> out ((size_t) n, 0.0f), norm ((size_t) n, 0.0f);
+        std::vector<float> out ((size_t) n, 0.0f), layer ((size_t) n, 0.0f), norm ((size_t) n, 0.0f), removed;
         const float* x = sound.getReadPointer (ch);
         for (int f = 0; f < frames; ++f)
         {
             transform (x, f, spectrum);
+            removed.assign ((size_t) size * 2, 0.0f);
             for (int b = 1; b < bins; ++b)
                 if (b * binHz >= 4000.0)
                 {
+                    // Everything the drum keeps is taken off the layer (and vice versa).
                     const float g = gains[(size_t) f][(size_t) topBandOf (b)];
+                    const float rest = std::sqrt (std::max (0.0f, 1.0f - g * g));
+                    removed[(size_t) b * 2] = spectrum[(size_t) b * 2] * rest;
+                    removed[(size_t) b * 2 + 1] = spectrum[(size_t) b * 2 + 1] * rest;
                     spectrum[(size_t) b * 2] *= g;
                     spectrum[(size_t) b * 2 + 1] *= g;
                 }
             fft.performRealOnlyInverseTransform (spectrum.data());
+            fft.performRealOnlyInverseTransform (removed.data());
             for (int i = 0; i < size; ++i)
                 if (const int idx = f * hop + i - size / 2; idx >= 0 && idx < n)
                 {
                     out[(size_t) idx] += spectrum[(size_t) i] * window[(size_t) i];
+                    layer[(size_t) idx] += removed[(size_t) i] * window[(size_t) i];
                     norm[(size_t) idx] += window[(size_t) i] * window[(size_t) i];
                 }
         }
         float* y = sound.getWritePointer (ch);
         for (int i = 0; i < n; ++i)
-            y[i] = norm[(size_t) i] > 1e-6f ? out[(size_t) i] / norm[(size_t) i] : y[i];
+        {
+            const bool covered = norm[(size_t) i] > 1e-6f;
+            if (keepLayer)
+                layerOut->setSample (ch, i, covered ? layer[(size_t) i] / norm[(size_t) i] : 0.0f);
+            y[i] = covered ? out[(size_t) i] / norm[(size_t) i] : y[i];
+        }
     }
-    // Clearly ringing across the top end: past the body, the layer is all there is.
-    return ringingBands >= 2 ? std::min (n, quietFrame * hop) : n;
+    return cut ? std::min (n, quietFrame * hop) : n;
 }
 
 // How much the energy jumps at `position` (next 10 ms vs previous 10 ms), in dB, above highPassHz.
@@ -1774,6 +1792,30 @@ AnalysisResult DrumAnalyzer::analyse (const juce::AudioBuffer<float>& source, do
         for (auto& p : pending[(size_t) c])
             graftTail (p.raw, p.length, p.tail, sr);
 
+    // Finishes a sound: continues a tail that was cut while still ringing, fades and normalises.
+    auto finish = [&] (juce::AudioBuffer<float>& sound, DrumClass drumClass, int seed)
+    {
+        // How fast each kind of drum dies away at the least (dB per second), so a tail measured over
+        // leftover music can't ring on unnaturally.
+        if (drumClass != DrumClass::kick)
+        {
+            const double minDecay = drumClass == DrumClass::hat ? 350.0 : drumClass == DrumClass::openHat ? 60.0 : 120.0;
+            extendTail (sound, sr, seed, minDecay, (int) (settingsFor (drumClass).extractSeconds * sr));
+        }
+        applyFades (sound, std::max (1, (int) (0.0003 * sr)),
+                    std::min (sound.getNumSamples() / 2, (int) (settingsFor (drumClass).fadeOutSeconds * sr)));
+        normalise (sound);
+    };
+
+    // Open hats that only ever ring on top of a snare or clap, taken out of them.
+    struct RingingLayer
+    {
+        juce::AudioBuffer<float> audio;
+        int used = 0;
+        std::vector<int> sourceHits;
+    };
+    std::vector<RingingLayer> ringingLayers;
+
     // Clean up, trim and normalise every sound.
     for (int c = 0; c < numDrumClasses; ++c)
     {
@@ -1786,18 +1828,17 @@ AnalysisResult DrumAnalyzer::analyse (const juce::AudioBuffer<float>& source, do
             const int end = std::max ((int) (0.02 * sr), findEnd (stacked, sr));
             stacked.setSize (2, std::min (end, stacked.getNumSamples()), true);
             if (drumClass == DrumClass::snare || drumClass == DrumClass::clap)
-                stacked.setSize (2, std::max ((int) (0.02 * sr), tameRingingTop (stacked, sr)), true);
-            // How fast each kind of drum dies away at the least (dB per second), so a tail measured over
-            // leftover music can't ring on unnaturally.
-            if (drumClass != DrumClass::kick)
             {
-                const double minDecay = drumClass == DrumClass::hat ? 350.0 : drumClass == DrumClass::openHat ? 60.0 : 120.0;
-                extendTail (stacked, sr, c * 100 + (int) result.kit[(size_t) c].size(), minDecay,
-                            (int) (settingsFor (drumClass).extractSeconds * sr));
+                RingingLayer layer;
+                stacked.setSize (2, std::max ((int) (0.02 * sr), tameRingingTop (stacked, sr, &layer.audio)), true);
+                if (layer.audio.getNumSamples() > 0)
+                {
+                    layer.used = p.used;
+                    layer.sourceHits = p.sourceHits;
+                    ringingLayers.push_back (std::move (layer));
+                }
             }
-            applyFades (stacked, std::max (1, (int) (0.0003 * sr)),
-                        std::min (stacked.getNumSamples() / 2, (int) (settingsFor (drumClass).fadeOutSeconds * sr)));
-            normalise (stacked);
+            finish (stacked, drumClass, c * 100 + (int) result.kit[(size_t) c].size());
 
             DrumSample sample;
             sample.audio = std::move (stacked);
@@ -1824,6 +1865,33 @@ AnalysisResult DrumAnalyzer::analyse (const juce::AudioBuffer<float>& source, do
         variations.erase (std::remove_if (variations.begin(), variations.end(),
                                           [sr] (auto& v) { return v.audio.getNumSamples() < (int) (0.04 * sr); }),
                           variations.end());
+    }
+
+    // No open hat of its own: use the one ringing on top of the snares and claps. The longest layer
+    // first (it holds most of the hat's own ring), then the best stacked.
+    if (auto& openHats = result.kit[(size_t) DrumClass::openHat]; openHats.empty())
+    {
+        std::stable_sort (ringingLayers.begin(), ringingLayers.end(), [] (auto& a, auto& b)
+        {
+            return std::make_pair (a.audio.getNumSamples(), a.used) > std::make_pair (b.audio.getNumSamples(), b.used);
+        });
+        for (auto& layer : ringingLayers)
+        {
+            if (openHats.size() >= 2)
+                break;
+            cleanUp (layer.audio, DrumClass::openHat, sr);
+            finish (layer.audio, DrumClass::openHat, 400 + (int) openHats.size());
+            for (int index : layer.sourceHits)
+                if (result.hits[(size_t) index].secondaryClass < 0)
+                    result.hits[(size_t) index].secondaryClass = (int) DrumClass::openHat;
+
+            DrumSample sample;
+            sample.audio = std::move (layer.audio);
+            sample.sampleRate = sr;
+            sample.hitsStacked = layer.used;
+            sample.sourceHits = std::move (layer.sourceHits);
+            openHats.push_back (std::move (sample));
+        }
     }
 
     // Nearly every track has a snare or clap. If neither repeats but percussion has a big

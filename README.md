@@ -98,9 +98,10 @@ The plugins end up in `build/KITNAP_artefacts/Release/`. The build downloads ONN
 ./build/KitnapAnalyzerTest_artefacts/Release/KitnapAnalyzerTest kit-out    # ...and write the extracted kit as WAVs
 ./build/KitnapAnalyzerTest_artefacts/Release/KitnapAnalyzerTest --file song.wav kit-out   # analyse your own file
 ./build/KitnapAnalyzerTest_artefacts/Release/KitnapAnalyzerTest --separate song.mp3 drums.wav   # write the AI drum stem
-./build/KitnapAnalyzerTest_artefacts/Release/KitnapAnalyzerTest --split drums.wav parts      # write its kick, snare and hi-hat parts
+./build/KitnapAnalyzerTest_artefacts/Release/KitnapAnalyzerTest --split drums.wav parts      # write its six parts (kick, snare, toms, hi-hat, ride, crash)
 ./build/KitnapAnalyzerTest_artefacts/Release/KitnapAnalyzerTest --file-ai song.mp3 kit-out   # the plugin's full AI pipeline
 ./build/KitnapAnalyzerTest_artefacts/Release/KitnapAnalyzerTest --file-parts drums.wav parts kit-out   # only the last step
+./build/KitnapAnalyzerTest_artefacts/Release/KitnapAnalyzerTest --hits drums.wav            # list the detected hits and their drums
 ```
 
 On Linux, `-DKITNAP_BUILD_SCREENSHOT=ON` also builds `KitnapScreenshot`, which renders the UI to PNGs (run it under `xvfb-run`).

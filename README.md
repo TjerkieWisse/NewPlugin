@@ -34,7 +34,7 @@ The whole kit (every variation, the hit map and the waveform) is saved inside yo
 ## How it works
 
 0. **Separate the drums (AI).** An MDX-Net drum separation model, run on the CPU with ONNX Runtime, removes everything that isn't drums. The song is processed in 12-second chunks with overlapping edges so chunk borders never land in the output.
-0. **Split the kit (AI).** A second model (DrumSep, MDX23C) splits the drum stem into kick, snare, hi-hat and more, in 3-second chunks that overlap by half and are cross-faded. Every step below then runs on each part separately: the kick pad comes from the kick part, snare and clap from the snare part, the hats from the hi-hat part, and percussion from the whole drum stem. So a hat ringing on top of a clap, or a hat on every kick, ends up on its own pad instead of in the other drum. If a part has none of a drum, that pad comes from the whole drum stem.
+0. **Split the kit (AI).** A second model (DrumSep, MDX23C) splits the drum stem into kick, snare, hi-hat and more, in 3-second chunks that overlap by half and are cross-faded. Every step below runs on the whole drum stem and on each part. The whole drum stem decides what the drums are (which pads, which variations); each sound is then swapped for the same drum from a part when the two clearly match (their first 120 ms correlate at 0.8 or more), which is that sound without whatever was layered on it. So a hat ringing on top of a clap, or a hat on every kick, no longer ends up in the other drum. The parts only fill in what the drum stem lacks, such as an open hat that only ever rings on top of a clap. Going by the drum stem first matters for electronic and heavily processed drums, where the split model, trained mostly on acoustic kits, can put a drum in the wrong part.
 1. **Find the hits.** Spectral-flux onset detection, then each hit is pinned to the sample by looking for the sharpest energy rise in three frequency bands. That way a quiet hat over a loud bass line is still placed exactly.
 2. **Name them.** For every hit it measures the energy the hit *adds* compared with just before it (so bass and chords ringing underneath are ignored): low end, mids, top, noisiness, how long the top end rings, and whether there are several quick bursts (a clap). A kick and a hat landing together counts as both.
 3. **Group them.** Hits of the same drum are compared waveform-to-waveform and grouped, so a song with two different snares gives you two variations.
@@ -100,6 +100,7 @@ The plugins end up in `build/KITNAP_artefacts/Release/`. The build downloads ONN
 ./build/KitnapAnalyzerTest_artefacts/Release/KitnapAnalyzerTest --separate song.mp3 drums.wav   # write the AI drum stem
 ./build/KitnapAnalyzerTest_artefacts/Release/KitnapAnalyzerTest --split drums.wav parts      # write its kick, snare and hi-hat parts
 ./build/KitnapAnalyzerTest_artefacts/Release/KitnapAnalyzerTest --file-ai song.mp3 kit-out   # the plugin's full AI pipeline
+./build/KitnapAnalyzerTest_artefacts/Release/KitnapAnalyzerTest --file-parts drums.wav parts kit-out   # only the last step
 ```
 
 On Linux, `-DKITNAP_BUILD_SCREENSHOT=ON` also builds `KitnapScreenshot`, which renders the UI to PNGs (run it under `xvfb-run`).

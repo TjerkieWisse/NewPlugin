@@ -9,6 +9,7 @@
 //        KitnapAnalyzerTest --separate song.mp3 drums.wav   writes the AI-separated drum stem
 //        KitnapAnalyzerTest --split drums.wav folder         writes the kick, snare and hi-hat stems of a drum stem
 //        KitnapAnalyzerTest --file-ai song.mp3 [out]         the plugin's full pipeline: separate, split, analyse
+//        KitnapAnalyzerTest --file-parts drums.wav folder [out]  the last step only, from --split's stems
 
 #include <juce_audio_formats/juce_audio_formats.h>
 #include "analysis/DrumAnalyzer.h"
@@ -363,8 +364,36 @@ int analyseFileWithAI (const juce::File& in, const juce::File& out)
     return ok ? 0 : 1;
 }
 
+// --file-parts drums.wav folder [out]: builds the kit from a drum stem and the stems --split wrote.
+int analyseParts (const juce::File& drumsFile, const juce::File& folder, const juce::File& out)
+{
+    double sr = 0.0, partRate = 0.0;
+    const auto drums = readFile (drumsFile, sr);
+    const auto kick = readFile (folder.getChildFile ("kick.wav"), partRate);
+    const auto snare = readFile (folder.getChildFile ("snare.wav"), partRate);
+    const auto hihat = readFile (folder.getChildFile ("hihat.wav"), partRate);
+    if (drums.getNumSamples() == 0 || kick.getNumSamples() == 0 || snare.getNumSamples() == 0 || hihat.getNumSamples() == 0)
+    {
+        std::cerr << "Needs a drum stem and kick.wav, snare.wav and hihat.wav\n";
+        return 1;
+    }
+    const auto started = juce::Time::getMillisecondCounterHiRes();
+    const auto result = DrumAnalyzer::analyseParts (drums, kick, snare, hihat, sr);
+    std::cout << "Analysed in " << juce::roundToInt (juce::Time::getMillisecondCounterHiRes() - started) << " ms, "
+              << result.hits.size() << " hits\n";
+    printKit (result);
+    if (out != juce::File())
+        writeKit (result, out);
+    return 0;
+}
+
 int main (int argc, char** argv)
 {
+    if (argc >= 4 && juce::String (argv[1]) == "--file-parts")
+        return analyseParts (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]),
+                             juce::File::getCurrentWorkingDirectory().getChildFile (argv[3]),
+                             argc >= 5 ? juce::File::getCurrentWorkingDirectory().getChildFile (argv[4]) : juce::File());
+
     if (argc >= 4 && juce::String (argv[1]) == "--split")
         return splitFile (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]),
                           juce::File::getCurrentWorkingDirectory().getChildFile (argv[3]));

@@ -1272,6 +1272,79 @@ void normalise (juce::AudioBuffer<float>& audio)
     if (peak > 0.0f)
         audio.applyGain (juce::Decibels::decibelsToGain (-0.5f) / peak);
 }
+
+// How alike two drum sounds are: the best normalised cross-correlation of their first 120 ms
+// within +-5 ms, above 250 Hz unless `fullBand`. Each sound's spectrum is computed once.
+class SoundMatcher
+{
+public:
+    explicit SoundMatcher (double sampleRate)
+        : sr (sampleRate), length ((int) (0.12 * sampleRate)), maxLag ((int) (0.005 * sampleRate)), fft (fftOrder)
+    {
+    }
+
+    float similarity (const juce::AudioBuffer<float>& a, const juce::AudioBuffer<float>& b, bool fullBand)
+    {
+        const auto& x = fingerprint (a, fullBand);
+        const auto& y = fingerprint (b, fullBand);
+        if (x.energy <= 0.0 || y.energy <= 0.0)
+            return 0.0f;
+
+        std::vector<float> product ((size_t) fftSize * 2, 0.0f);
+        for (int k = 0; k <= fftSize / 2; ++k)
+        {
+            const float ar = x.spectrum[(size_t) k * 2], ai = x.spectrum[(size_t) k * 2 + 1];
+            const float br = y.spectrum[(size_t) k * 2], bi = y.spectrum[(size_t) k * 2 + 1];
+            product[(size_t) k * 2] = ar * br + ai * bi;     // a * conj(b)
+            product[(size_t) k * 2 + 1] = ai * br - ar * bi;
+        }
+        fft.performRealOnlyInverseTransform (product.data());
+
+        float best = 0.0f;
+        for (int lag = -maxLag; lag <= maxLag; ++lag)
+            best = std::max (best, product[(size_t) (lag >= 0 ? lag : fftSize + lag)]);
+        return (float) (best / std::sqrt (x.energy * y.energy));
+    }
+
+private:
+    static constexpr int fftOrder = 14, fftSize = 1 << fftOrder; // fits 120 ms plus the lags at 96 kHz
+
+    struct Fingerprint
+    {
+        std::vector<float> spectrum;
+        double energy = 0.0;
+    };
+
+    const Fingerprint& fingerprint (const juce::AudioBuffer<float>& audio, bool fullBand)
+    {
+        auto& cached = cache[{ &audio, fullBand }];
+        if (! cached.spectrum.empty())
+            return cached;
+
+        const int n = audio.getNumSamples();
+        std::vector<float> mono ((size_t) n, 0.0f);
+        for (int ch = 0; ch < audio.getNumChannels(); ++ch)
+            for (int i = 0; i < n; ++i)
+                mono[(size_t) i] += audio.getSample (ch, i);
+        if (! fullBand)
+            for (int pass = 0; pass < 2; ++pass)
+                Biquad::highpass (sr, 250.0).processZeroPhase (mono.data(), n);
+
+        cached.spectrum.assign ((size_t) fftSize * 2, 0.0f);
+        for (int i = 0; i < std::min (n, std::min (length, fftSize - maxLag)); ++i)
+        {
+            cached.spectrum[(size_t) i] = mono[(size_t) i];
+            cached.energy += (double) mono[(size_t) i] * mono[(size_t) i];
+        }
+        fft.performRealOnlyForwardTransform (cached.spectrum.data(), true);
+        return cached;
+    }
+
+    double sr;
+    int length, maxLag;
+    juce::dsp::FFT fft;
+    std::map<std::pair<const void*, bool>, Fingerprint> cache;
+};
 } // namespace
 
 //==============================================================================
@@ -1893,6 +1966,7 @@ AnalysisResult DrumAnalyzer::analyse (const juce::AudioBuffer<float>& source, do
             sample.sampleRate = sr;
             sample.hitsStacked = layer.used;
             sample.sourceHits = std::move (layer.sourceHits);
+            sample.fromLayer = true;
             openHats.push_back (std::move (sample));
         }
     }
@@ -1956,54 +2030,116 @@ AnalysisResult DrumAnalyzer::analyseParts (const juce::AudioBuffer<float>& drums
     for (auto& t : threads)
         t.join();
 
-    AnalysisResult result;
     if (shouldCancel && shouldCancel())
-        return result;
+        return {};
 
-    // Where each class comes from.
-    std::array<int, numDrumClasses> from {};
-    from[(size_t) DrumClass::kick] = kickStem;
-    from[(size_t) DrumClass::snare] = snareStem;
-    from[(size_t) DrumClass::clap] = snareStem;
-    from[(size_t) DrumClass::hat] = hihatStem;
-    from[(size_t) DrumClass::openHat] = hihatStem;
-    from[(size_t) DrumClass::perc] = whole;
-    for (int c = 0; c < numDrumClasses; ++c)
-        if (results[(size_t) from[(size_t) c]].kit[(size_t) c].empty())
-            from[(size_t) c] = whole;
+    // The whole drum stem's analysis is the base.
+    AnalysisResult result = std::move (results[whole]);
 
-    // The hits shown on the waveform: each class's hits from the analysis its sounds came from.
-    struct Origin { int source; size_t index; };
-    std::vector<Origin> kept;
-    for (int i = 0; i < numSources; ++i)
-        for (size_t h = 0; h < results[(size_t) i].hits.size(); ++h)
-            if (from[(size_t) results[(size_t) i].hits[h].drumClass] == i)
-                kept.push_back ({ i, h });
-    std::sort (kept.begin(), kept.end(), [&] (const Origin& a, const Origin& b)
+    // A sound from a split stem replaces a base sound when they are clearly the same drum: their
+    // first 120 ms correlate at 0.8 or more (above 250 Hz, where the bass and the kick's boom under
+    // a snare can't count; the full band for kicks). Different drums score well below 0.6.
+    constexpr float sameDrum = 0.8f;
+    SoundMatcher matcher (sr);
+    struct Candidate { int source, drumClass; size_t index; bool used; };
+    std::vector<Candidate> candidates;
+    for (int i = kickStem; i <= hihatStem; ++i)
+        for (int c = 0; c < numDrumClasses; ++c)
+            for (size_t v = 0; v < results[(size_t) i].kit[(size_t) c].size(); ++v)
+                candidates.push_back ({ i, c, v, false });
+    auto partSample = [&] (const Candidate& cand) -> DrumSample&
     {
-        return results[(size_t) a.source].hits[a.index].position < results[(size_t) b.source].hits[b.index].position;
-    });
-
-    std::array<std::map<size_t, int>, numSources> newIndex;
-    for (auto& o : kept)
-    {
-        newIndex[(size_t) o.source][o.index] = (int) result.hits.size();
-        result.hits.push_back (results[(size_t) o.source].hits[o.index]);
-    }
+        return results[(size_t) cand.source].kit[(size_t) cand.drumClass][cand.index];
+    };
 
     for (int c = 0; c < numDrumClasses; ++c)
-    {
-        const int source = from[(size_t) c];
-        for (auto& sample : results[(size_t) source].kit[(size_t) c])
+        for (auto& sample : result.kit[(size_t) c])
         {
-            std::vector<int> hits;
-            for (int h : sample.sourceHits)
-                if (auto it = newIndex[(size_t) source].find ((size_t) h); it != newIndex[(size_t) source].end())
-                    hits.push_back (it->second);
-            sample.sourceHits = std::move (hits);
-            result.kit[(size_t) c].push_back (std::move (sample));
+            if (shouldCancel && shouldCancel())
+                return {};
+            // Among the matches about as good as the best one, the one stacked from the most hits.
+            const bool fullBand = (DrumClass) c == DrumClass::kick;
+            std::vector<std::pair<float, Candidate*>> matches;
+            float bestScore = 0.0f;
+            for (auto& cand : candidates)
+                if (! cand.used)
+                    if (const float score = matcher.similarity (sample.audio, partSample (cand).audio, fullBand); score >= sameDrum)
+                    {
+                        matches.push_back ({ score, &cand });
+                        bestScore = std::max (bestScore, score);
+                    }
+            Candidate* best = nullptr;
+            for (auto& [score, cand] : matches)
+                if (score >= bestScore - 0.03f && (best == nullptr || partSample (*cand).hitsStacked > partSample (*best).hitsStacked))
+                    best = cand;
+            if (best != nullptr)
+            {
+                best->used = true;
+                auto& replacement = partSample (*best);
+                sample.audio = replacement.audio;
+                sample.hitsStacked = replacement.hitsStacked;
+                sample.fromLayer = false;
+            }
         }
+
+    // What the drum stem lacks: a class it found none of, or only an open hat reconstructed from
+    // under another drum, comes from the stem that drum belongs in (if it has it).
+    std::array<int, numDrumClasses> stemOf {};
+    stemOf[(size_t) DrumClass::kick] = kickStem;
+    stemOf[(size_t) DrumClass::snare] = snareStem;
+    stemOf[(size_t) DrumClass::clap] = snareStem;
+    stemOf[(size_t) DrumClass::hat] = hihatStem;
+    stemOf[(size_t) DrumClass::openHat] = hihatStem;
+    stemOf[(size_t) DrumClass::perc] = whole;
+    for (int c = 0; c < numDrumClasses; ++c)
+    {
+        auto& variations = result.kit[(size_t) c];
+        const bool onlyReconstructed = std::all_of (variations.begin(), variations.end(), [] (auto& v) { return v.fromLayer; });
+        if (stemOf[(size_t) c] == whole || ! onlyReconstructed)
+            continue;
+        auto& stem = results[(size_t) stemOf[(size_t) c]];
+        std::vector<DrumSample> fromStem;
+        for (auto& sample : stem.kit[(size_t) c])
+            if (! sample.fromLayer)
+                fromStem.push_back (std::move (sample));
+        if (fromStem.empty())
+            continue;
+
+        // Their hits join the base's, so they show on the waveform.
+        std::map<int, int> newIndex;
+        for (auto& sample : fromStem)
+            for (int& h : sample.sourceHits)
+            {
+                auto [it, added] = newIndex.try_emplace (h, (int) result.hits.size());
+                if (added)
+                    result.hits.push_back (stem.hits[(size_t) h]);
+                h = it->second;
+            }
+        variations = std::move (fromStem);
     }
+
+    // Best stacked first: after the swaps that is no longer the base's order.
+    for (auto& variations : result.kit)
+        std::stable_sort (variations.begin(), variations.end(), [] (auto& a, auto& b) { return a.hitsStacked > b.hitsStacked; });
+
+    // Keep the hits in time order (the waveform expects it), remapping the sounds' hit indices.
+    std::vector<int> order ((size_t) result.hits.size());
+    std::iota (order.begin(), order.end(), 0);
+    std::stable_sort (order.begin(), order.end(), [&] (int a, int b) { return result.hits[(size_t) a].position < result.hits[(size_t) b].position; });
+    std::vector<int> position (order.size());
+    std::vector<DetectedHit> sorted;
+    sorted.reserve (order.size());
+    for (size_t k = 0; k < order.size(); ++k)
+    {
+        position[(size_t) order[k]] = (int) k;
+        sorted.push_back (result.hits[(size_t) order[k]]);
+    }
+    result.hits = std::move (sorted);
+    for (auto& variations : result.kit)
+        for (auto& sample : variations)
+            for (int& h : sample.sourceHits)
+                h = position[(size_t) h];
+
     return result;
 }
 } // namespace kitnap

@@ -24,6 +24,7 @@ struct DrumSample
     double sampleRate = 44100.0;
     int hitsStacked = 1; // how many hits of the song were averaged into this sound
     std::vector<int> sourceHits; // indices into AnalysisResult::hits of every hit in this group
+    bool fromLayer = false; // reconstructed from a drum ringing on top of another (no clean hits of it)
 };
 
 // A detected hit in the source audio (used for the waveform markers).
@@ -56,10 +57,12 @@ public:
                                    const std::function<void (float)>& progress = {},
                                    const std::function<bool()>& shouldCancel = {});
 
-    // Builds the kit from a drum stem that the AI has also split into kick, snare and hi-hat stems:
-    // the kick pad comes from the kick stem, snare and clap from the snare stem, the hats from the
-    // hi-hat stem (so a hat ringing on top of a clap no longer ends up in it), and percussion from
-    // the whole drum stem. A class its own stem has none of falls back to the whole drum stem.
+    // Builds the kit from a drum stem that the AI has also split into kick, snare and hi-hat stems.
+    // The whole drum stem decides what the drums are (classes, variations, hits); every sound is
+    // then swapped for the same drum taken from a split stem when one clearly matches it, which is
+    // the same sound without what was layered on it. The split only fills in what the drum stem
+    // lacks (e.g. an open hat that only ever rang on top of a clap), since on electronic or heavily
+    // processed drums it can put a drum in the wrong stem.
     static AnalysisResult analyseParts (const juce::AudioBuffer<float>& drums, const juce::AudioBuffer<float>& kick,
                                         const juce::AudioBuffer<float>& snare, const juce::AudioBuffer<float>& hihat,
                                         double sampleRate,

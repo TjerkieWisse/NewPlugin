@@ -1,6 +1,6 @@
 #!/bin/bash
 # Builds the macOS installer: KITNAP-<version>-macOS.pkg with VST3, AU, the standalone app and the AI
-# drum split model as separate, optional parts.
+# models as separate, optional parts.
 #
 # Usage: installer/mac/build-pkg.sh <version> [artefacts-folder] [output-folder] [ai-folder]
 set -euo pipefail
@@ -43,10 +43,10 @@ component vst3 "$artefacts/VST3/KITNAP.vst3" "/Library/Audio/Plug-Ins/VST3"
 component au "$artefacts/AU/KITNAP.component" "/Library/Audio/Plug-Ins/Components" "$here/au-scripts"
 component app "$artefacts/Standalone/KITNAP.app" "/Applications"
 
-# The drum split model is shared by the plugins and the app: /Library/Application Support/KITNAP.
-mkdir -p "$work/split-files/KITNAP"
-cp "$ai/kitnap_drumsep.onnx" "$work/split-files/KITNAP/"
-component split "$work/split-files/KITNAP" "/Library/Application Support"
+# The AI models are shared by the plugins and the app: /Library/Application Support/KITNAP.
+mkdir -p "$work/model-files/KITNAP"
+cp "$ai/kitnap_drums_sw.onnx" "$ai/kitnap_drumsep.onnx" "$work/model-files/KITNAP/"
+component models "$work/model-files/KITNAP" "/Library/Application Support"
 
 sed "s/@VERSION@/$version/g" "$here/distribution.xml" > "$work/distribution.xml"
 productbuild --distribution "$work/distribution.xml" --resources "$here/resources" \

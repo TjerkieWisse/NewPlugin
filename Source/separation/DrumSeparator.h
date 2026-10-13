@@ -7,7 +7,7 @@
 
 namespace kitnap
 {
-// AI drum separation: pulls the drum stem out of a full mix with an MDX-Net style ONNX model,
+// AI drum separation: pulls the drum stem out of a full mix with a BS-RoFormer ONNX model,
 // so the analyzer sees the drums without the music around them.
 //
 // ONNX Runtime and the models are looked up next to the plugin binary (in "Resources" or
@@ -27,7 +27,7 @@ public:
     static juce::String unavailableReason();
 
     // Returns the drum stem at modelSampleRate (stereo), or an empty buffer on failure or cancel.
-    // progress receives 0..1. Runs on the calling thread and can take a minute for a full song.
+    // progress receives 0..1. Runs on the calling thread and takes a few minutes for a full song.
     static juce::AudioBuffer<float> separate (const juce::AudioBuffer<float>& source, double sampleRate,
                                               const std::function<void (float)>& progress,
                                               const std::function<bool()>& shouldCancel,

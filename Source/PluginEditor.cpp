@@ -263,7 +263,7 @@ void KitnapAudioProcessorEditor::refreshAIButton()
                                              "so every pad is built from its own drum. Much cleaner on full songs; "
                                              "takes a few minutes per song.")
                              : juce::String ("AI drum separation: pulls the drums out of the mix before the kit is extracted. "
-                                             "Much cleaner on full songs, takes about a minute. (The drum split model "
+                                             "Much cleaner on full songs, takes a few minutes. (The drum split model "
                                              "isn't installed, so layered drums are separated less cleanly.)"));
 }
 

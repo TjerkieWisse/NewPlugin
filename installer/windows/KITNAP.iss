@@ -41,14 +41,15 @@ Name: "custom"; Description: "Custom"; Flags: iscustom
 [Components]
 Name: "vst3"; Description: "VST3 plugin (FL Studio, Ableton Live, Cubase, Studio One, Reaper, ...)"; Types: full plugin custom
 Name: "standalone"; Description: "Standalone app"; Types: full custom
-Name: "split"; Description: "AI drum split model (cleaner kits, 440 MB)"; Types: full plugin custom
+Name: "ai"; Description: "AI models (drum separation and drum split, 650 MB)"; Types: full plugin custom
 
 [Files]
 ; The whole KITNAP.vst3 folder, including the AI runtime and model in Contents\Resources.
 Source: "{#Artefacts}\VST3\KITNAP.vst3\*"; DestDir: "{commoncf64}\VST3\KITNAP.vst3"; Components: vst3; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#Artefacts}\Standalone\*"; DestDir: "{app}"; Components: standalone; Flags: ignoreversion recursesubdirs createallsubdirs
-; The drum split model is shared by the plugin and the app, so it's installed once.
-Source: "{#AIFiles}\kitnap_drumsep.onnx"; DestDir: "{commonappdata}\KITNAP"; Components: split; Flags: ignoreversion nocompression
+; The AI models are shared by the plugin and the app, so they're installed once.
+Source: "{#AIFiles}\kitnap_drums_sw.onnx"; DestDir: "{commonappdata}\KITNAP"; Components: ai; Flags: ignoreversion nocompression
+Source: "{#AIFiles}\kitnap_drumsep.onnx"; DestDir: "{commonappdata}\KITNAP"; Components: ai; Flags: ignoreversion nocompression
 
 [Icons]
 Name: "{autoprograms}\KITNAP"; Filename: "{app}\KITNAP.exe"; Components: standalone

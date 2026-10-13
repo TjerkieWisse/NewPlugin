@@ -15,7 +15,7 @@ struct ModelSpec
     const char* fileName;
     int fftOrder, hop;
 };
-const ModelSpec drumsModel { "kitnap_drums.onnx", 12, 1024 };
+const ModelSpec drumsModel { "kitnap_drums_sw.onnx", 11, 512 }; // BS-RoFormer SW, drums only
 const ModelSpec splitModel { "kitnap_drumsep.onnx", 11, 512 };
 
 juce::Array<juce::File> searchFolders()
@@ -118,12 +118,15 @@ bool failed (const OrtApi* api, OrtStatus* status, juce::String& error)
 
 //==============================================================================
 // STFT matching torch.stft / torch.istft with center=True and a periodic Hann window,
-// which is what MDX-Net models are trained with.
+// which is what MDX-Net and RoFormer models are trained with.
+//
+// Tensor layouts: MDX-Net style [4][dimF][dimT] (ch0 re, ch0 im, ch1 re, ch1 im), or with
+// `complexLast` RoFormer style [2][dimF][dimT][2] (channel, bin, frame, re/im).
 class Spectrogram
 {
 public:
-    Spectrogram (int fftOrder, int hopSize, int numFreqBins, int numFrames)
-        : fftSize (1 << fftOrder), hop (hopSize),
+    Spectrogram (int fftOrder, int hopSize, int numFreqBins, int numFrames, bool complexLastLayout = false)
+        : fftSize (1 << fftOrder), hop (hopSize), complexLast (complexLastLayout),
           dimF (numFreqBins), dimT (numFrames), binsF ((size_t) numFreqBins), framesT ((size_t) numFrames), fft (fftOrder)
     {
         window.resize ((size_t) fftSize);
@@ -134,7 +137,15 @@ public:
 
     int chunkLength() const { return hop * (dimT - 1); }
 
-    // audio: chunkLength() samples per channel -> tensor [4][dimF][dimT] (ch0 re, ch0 im, ch1 re, ch1 im).
+    // Where the real part of (channel, bin, frame) lives in a tensor; the imaginary part is at + imagOffset().
+    size_t index (int ch, size_t f, int t) const
+    {
+        return complexLast ? (((size_t) ch * binsF + f) * framesT + (size_t) t) * 2
+                           : (size_t) (2 * ch) * binsF * framesT + f * framesT + (size_t) t;
+    }
+    size_t imagOffset() const { return complexLast ? 1 : binsF * framesT; }
+
+    // audio: chunkLength() samples per channel -> tensor (see the layouts above).
     void forward (const float* const* audio, std::vector<float>& tensor)
     {
         const int length = chunkLength();
@@ -155,18 +166,16 @@ public:
                 }
                 fft.performRealOnlyForwardTransform (scratch.data(), true);
 
-                const auto plane = binsF * framesT;
-                float* re = tensor.data() + (size_t) (2 * ch) * plane;
-                float* im = tensor.data() + (size_t) (2 * ch + 1) * plane;
                 for (size_t f = 0; f < binsF; ++f)
                 {
-                    re[f * framesT + (size_t) t] = scratch[f * 2];
-                    im[f * framesT + (size_t) t] = scratch[f * 2 + 1];
+                    const auto i = index (ch, f, t);
+                    tensor[i] = scratch[f * 2];
+                    tensor[i + imagOffset()] = scratch[f * 2 + 1];
                 }
             }
     }
 
-    // tensor [4][dimF][dimT] -> chunkLength() samples per channel (bins above dimF are zero).
+    // tensor (see the layouts above) -> chunkLength() samples per channel (bins above dimF are zero).
     void inverse (const float* tensor, std::vector<float> (&audio)[2])
     {
         const int length = chunkLength();
@@ -177,17 +186,14 @@ public:
         {
             std::fill (sum.begin(), sum.end(), 0.0f);
             std::fill (norm.begin(), norm.end(), 0.0f);
-            const auto plane = binsF * framesT;
-            const float* re = tensor + (size_t) (2 * ch) * plane;
-            const float* im = tensor + (size_t) (2 * ch + 1) * plane;
-
             for (int t = 0; t < dimT; ++t)
             {
                 std::fill (scratch.begin(), scratch.end(), 0.0f);
                 for (size_t f = 0; f < binsF; ++f)
                 {
-                    scratch[f * 2] = re[f * framesT + (size_t) t];
-                    scratch[f * 2 + 1] = im[f * framesT + (size_t) t];
+                    const auto i = index (ch, f, t);
+                    scratch[f * 2] = tensor[i];
+                    scratch[f * 2 + 1] = tensor[i + imagOffset()];
                 }
                 fft.performRealOnlyInverseTransform (scratch.data());
 
@@ -210,6 +216,7 @@ public:
     const int fftSize, hop;
 
 private:
+    bool complexLast;
     int dimF, dimT;
     size_t binsF, framesT; // the same, for indexing
     juce::dsp::FFT fft;
@@ -242,14 +249,17 @@ struct Session
     OrtAllocator* allocator = nullptr;
     char* inputName = nullptr;
     char* outputName = nullptr;
-    int dimF = 0, dimT = 0;
-    size_t outputSize = 0; // floats per run: [4][dimF][dimT] times the number of stems
+    std::vector<int64_t> inputDims, outputDims;
+    size_t inputSize = 0, outputSize = 0; // floats per run
 
-    bool open (OrtEnv* env, const juce::File& model, int maxBins, juce::String& error)
+    bool open (OrtEnv* env, const juce::File& model, juce::String& error)
     {
         if (failed (api, api->CreateSessionOptions (&options), error)) return false;
         if (failed (api, api->SetIntraOpNumThreads (options, std::max (1, juce::SystemStats::getNumCpus() - 1)), error)) return false;
         if (failed (api, api->SetSessionGraphOptimizationLevel (options, ORT_ENABLE_ALL), error)) return false;
+        // Planning all buffers ahead keeps every intermediate tensor alive at once; for attention
+        // models that alone is gigabytes.
+        if (failed (api, api->DisableMemPattern (options), error)) return false;
 
        #if JUCE_WINDOWS
         const auto path = model.getFullPathName().toWideCharPointer();
@@ -262,49 +272,51 @@ struct Session
         if (failed (api, api->SessionGetOutputName (session, 0, allocator, &outputName), error)) return false;
         if (failed (api, api->CreateCpuMemoryInfo (OrtArenaAllocator, OrtMemTypeDefault, &memoryInfo), error)) return false;
 
-        // Expect an input of [batch, 4, dimF, dimT].
-        OrtTypeInfo* typeInfo = nullptr;
-        if (failed (api, api->SessionGetInputTypeInfo (session, 0, &typeInfo), error)) return false;
-        const OrtTensorTypeAndShapeInfo* tensorInfo = nullptr;
-        size_t numDims = 0;
-        int64_t dims[4] {};
-        const bool ok = ! failed (api, api->CastTypeInfoToTensorInfo (typeInfo, &tensorInfo), error) && tensorInfo != nullptr
-                     && ! failed (api, api->GetDimensionsCount (tensorInfo, &numDims), error) && numDims == 4
-                     && ! failed (api, api->GetDimensions (tensorInfo, dims, 4), error);
-        api->ReleaseTypeInfo (typeInfo);
-
-        if (! ok || dims[1] != 4 || dims[2] <= 0 || dims[2] > maxBins || dims[3] <= 1)
+        auto shapeOf = [&] (bool input, std::vector<int64_t>& dims, size_t& size)
         {
-            error = "Unexpected separation model format";
+            OrtTypeInfo* typeInfo = nullptr;
+            if (failed (api, input ? api->SessionGetInputTypeInfo (session, 0, &typeInfo)
+                                   : api->SessionGetOutputTypeInfo (session, 0, &typeInfo), error))
+                return false;
+            const OrtTensorTypeAndShapeInfo* tensorInfo = nullptr;
+            size_t numDims = 0;
+            bool ok = ! failed (api, api->CastTypeInfoToTensorInfo (typeInfo, &tensorInfo), error) && tensorInfo != nullptr
+                   && ! failed (api, api->GetDimensionsCount (tensorInfo, &numDims), error) && numDims > 0 && numDims <= 8;
+            if (ok)
+            {
+                dims.assign (numDims, 0);
+                ok = ! failed (api, api->GetDimensions (tensorInfo, dims.data(), numDims), error);
+            }
+            api->ReleaseTypeInfo (typeInfo);
+            if (! ok)
+                return false;
+            dims[0] = 1; // batch
+            size = 1;
+            for (auto d : dims)
+            {
+                if (d <= 0)
+                    return false;
+                size *= (size_t) d;
+            }
+            return true;
+        };
+        if (! shapeOf (true, inputDims, inputSize) || ! shapeOf (false, outputDims, outputSize))
+        {
+            if (error.isEmpty())
+                error = "Unexpected separation model format";
             return false;
         }
-        dimF = (int) dims[2];
-        dimT = (int) dims[3];
-
-        // The output is [batch, 4, dimF, dimT] or [batch, stems, 4, dimF, dimT].
-        if (failed (api, api->SessionGetOutputTypeInfo (session, 0, &typeInfo), error)) return false;
-        int64_t outDims[5] {};
-        const bool outOk = ! failed (api, api->CastTypeInfoToTensorInfo (typeInfo, &tensorInfo), error) && tensorInfo != nullptr
-                        && ! failed (api, api->GetDimensionsCount (tensorInfo, &numDims), error) && (numDims == 4 || numDims == 5)
-                        && ! failed (api, api->GetDimensions (tensorInfo, outDims, numDims), error);
-        api->ReleaseTypeInfo (typeInfo);
-        if (! outOk)
-        {
-            error = "Unexpected separation model format";
-            return false;
-        }
-        const int64_t stems = numDims == 5 ? std::max<int64_t> (1, outDims[1]) : 1;
-        outputSize = (size_t) stems * 4 * (size_t) dimF * (size_t) dimT;
         return true;
     }
 
     bool run (std::vector<float>& input, std::vector<float>& output, juce::String& error)
     {
-        const int64_t shape[] { 1, 4, dimF, dimT };
+        jassert (input.size() == inputSize);
         OrtValue* in = nullptr;
         OrtValue* out = nullptr;
         if (failed (api, api->CreateTensorWithDataAsOrtValue (memoryInfo, input.data(), input.size() * sizeof (float),
-                                                              shape, 4, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &in), error))
+                                                              inputDims.data(), inputDims.size(),
+                                                              ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &in), error))
             return false;
 
         const char* inNames[] { inputName };
@@ -351,6 +363,97 @@ juce::AudioBuffer<float> resample (const juce::AudioBuffer<float>& in, double fr
     }
     return out;
 }
+
+#if KITNAP_HAS_ONNX
+// Runs a spectrogram model over `audio` (stereo, at the model's rate) in chunks that overlap by
+// `overlap` samples and are cross-faded there (a chunk's edges are its least reliable part).
+// The song is padded with silence so its start and end are covered like the rest. Returns
+// numStems buffers where only the wanted ones are filled (a full song's stems take a lot of
+// memory), or an empty vector on failure or cancel.
+std::vector<juce::AudioBuffer<float>> runChunked (Session& session, Spectrogram& spectrogram, int numStems,
+                                                  const juce::AudioBuffer<float>& audio, int overlap,
+                                                  const std::vector<int>& wanted,
+                                                  const std::function<void (float)>& progress,
+                                                  const std::function<bool()>& shouldCancel,
+                                                  juce::String& error)
+{
+    const int chunk = spectrogram.chunkLength();
+    const int length = audio.getNumSamples();
+    overlap = juce::jlimit (1, chunk / 2, overlap);
+    const int step = chunk - overlap;
+    const int border = overlap;
+    const int total = border + length + border + chunk;
+
+    std::vector<float> padded[2];
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        const float* src = audio.getReadPointer (std::min (ch, audio.getNumChannels() - 1));
+        padded[ch].assign ((size_t) total, 0.0f);
+        std::copy (src, src + length, padded[ch].begin() + border);
+    }
+    std::vector<float> fade ((size_t) chunk, 1.0f);
+    for (int i = 0; i < overlap; ++i)
+    {
+        fade[(size_t) i] = (float) i / (float) std::max (1, overlap - 1);
+        fade[(size_t) (chunk - 1 - i)] = fade[(size_t) i];
+    }
+
+    std::vector<juce::AudioBuffer<float>> stems ((size_t) numStems);
+    for (int s : wanted)
+    {
+        stems[(size_t) s].setSize (2, length);
+        stems[(size_t) s].clear();
+    }
+    std::vector<float> weight ((size_t) total, 0.0f), input, output, stem[2];
+    const size_t stemSize = session.outputSize / (size_t) numStems;
+    const int lastStart = total - chunk;
+
+    for (int start = 0; start <= lastStart; start += step)
+    {
+        if (shouldCancel && shouldCancel())
+            return {};
+
+        const float* chunkAudio[] { padded[0].data() + start, padded[1].data() + start };
+        spectrogram.forward (chunkAudio, input);
+        if (! session.run (input, output, error))
+            return {};
+
+        // The part of this chunk that lies inside the song; summed straight into the output and
+        // divided by the total fade weight at the end.
+        const int from = std::max (0, border - start), to = std::min (chunk, border + length - start);
+        for (int s = 0; s < numStems; ++s)
+        {
+            auto& buffer = stems[(size_t) s];
+            if (buffer.getNumSamples() == 0 || from >= to)
+                continue;
+            spectrogram.inverse (output.data() + (size_t) s * stemSize, stem);
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                float* out = buffer.getWritePointer (ch, start - border);
+                for (int i = from; i < to; ++i)
+                    out[i] += stem[ch][(size_t) i] * fade[(size_t) i];
+            }
+        }
+        for (int i = 0; i < chunk; ++i)
+            weight[(size_t) (start + i)] += fade[(size_t) i];
+
+        if (progress)
+            progress ((float) std::min (start + step, lastStart + step) / (float) (lastStart + step));
+    }
+
+    for (auto& buffer : stems)
+        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+        {
+            float* out = buffer.getWritePointer (ch);
+            for (int i = 0; i < length; ++i)
+            {
+                const float w = weight[(size_t) (border + i)];
+                out[i] = w > 1e-6f ? out[i] / w : 0.0f;
+            }
+        }
+    return stems;
+}
+#endif
 } // namespace
 
 //==============================================================================
@@ -392,50 +495,27 @@ juce::AudioBuffer<float> DrumSeparator::separate (const juce::AudioBuffer<float>
 
     auto& runtime = Runtime::get();
     Session session (runtime.api);
-    if (! session.open (runtime.env, findModel (drumsModel), (1 << drumsModel.fftOrder) / 2 + 1, error))
+    if (! session.open (runtime.env, findModel (drumsModel), error))
         return {};
+    // BS-RoFormer SW, drums only: [1, 2 channels, 1025 bins, frames, re/im] in and out.
+    const auto& dims = session.inputDims;
+    if (dims.size() != 5 || dims[1] != 2 || dims[2] != (1 << drumsModel.fftOrder) / 2 + 1 || dims[4] != 2
+        || session.outputSize != session.inputSize)
+    {
+        error = "Unexpected separation model format";
+        return {};
+    }
 
     const auto mix = resample (source, sampleRate, modelSampleRate, 2);
-    const int length = mix.getNumSamples();
+    Spectrogram spectrogram (drumsModel.fftOrder, drumsModel.hop, (int) dims[2], (int) dims[3], true);
 
-    // MDX-Net chunking: each chunk is analysed whole, but only its middle part (minus `trim`
-    // at both edges) is kept, so chunk borders never land in the output.
-    Spectrogram spectrogram (drumsModel.fftOrder, drumsModel.hop, session.dimF, session.dimT);
-    const int chunk = spectrogram.chunkLength();
-    const int trim = spectrogram.fftSize / 2;
-    const int keep = chunk - 2 * trim;
-    const int padded = ((length + keep - 1) / keep) * keep;
-
-    std::vector<float> paddedMix[2];
-    for (int ch = 0; ch < 2; ++ch)
-    {
-        paddedMix[ch].assign ((size_t) (trim + padded + trim + chunk), 0.0f);
-        std::copy (mix.getReadPointer (ch), mix.getReadPointer (ch) + length, paddedMix[ch].begin() + trim);
-    }
-
-    juce::AudioBuffer<float> drums (2, length);
-    drums.clear();
-    std::vector<float> input, output, stem[2];
-
-    for (int start = 0; start < padded; start += keep)
-    {
-        if (shouldCancel && shouldCancel())
-            return {};
-
-        const float* chunkAudio[] { paddedMix[0].data() + start, paddedMix[1].data() + start };
-        spectrogram.forward (chunkAudio, input);
-        if (! session.run (input, output, error))
-            return {};
-        spectrogram.inverse (output.data(), stem);
-
-        const int count = std::min (keep, length - start);
-        for (int ch = 0; ch < 2 && count > 0; ++ch)
-            drums.copyFrom (ch, start, stem[ch].data() + trim, count);
-
-        if (progress)
-            progress ((float) std::min (padded, start + keep) / (float) padded);
-    }
-
+    // The model works on short chunks (its attention over time needs memory that grows with the
+    // square of the chunk length); half a second of each chunk's edge is cross-faded with the next.
+    auto stems = runChunked (session, spectrogram, 1, mix, (int) (0.5 * modelSampleRate), { 0 },
+                             progress, shouldCancel, error);
+    if (stems.empty())
+        return {};
+    auto drums = std::move (stems[0]);
     return drums;
    #else
     juce::ignoreUnused (source, sampleRate, progress, shouldCancel);
@@ -461,93 +541,25 @@ std::vector<juce::AudioBuffer<float>> DrumSeparator::split (const juce::AudioBuf
 
     auto& runtime = Runtime::get();
     Session session (runtime.api);
-    if (! session.open (runtime.env, findModel (splitModel), (1 << splitModel.fftOrder) / 2 + 1, error))
+    if (! session.open (runtime.env, findModel (splitModel), error))
         return {};
-    const int numStems = (int) (session.outputSize / ((size_t) 4 * (size_t) session.dimF * (size_t) session.dimT));
-    if (numStems != numDrumParts)
+    // DrumSep (MDX23C): [1, 4, bins, frames] in, [1, parts, 4, bins, frames] out.
+    const auto& dims = session.inputDims;
+    if (dims.size() != 4 || dims[1] != 4 || dims[2] > (1 << splitModel.fftOrder) / 2 + 1
+        || session.outputSize != session.inputSize * (size_t) numDrumParts)
     {
         error = "Unexpected drum split model format";
         return {};
     }
 
-    Spectrogram spectrogram (splitModel.fftOrder, splitModel.hop, session.dimF, session.dimT);
-    const int chunk = spectrogram.chunkLength();
-    const int length = drums.getNumSamples();
-
-    // Chunks overlap by half and are cross-faded (each chunk's edges are its least reliable part).
-    // The song is padded with silence by a chunk on both sides so every sample is covered twice.
-    const int step = chunk / 2;
-    const int border = chunk - step;
-    const int total = border + length + border + chunk;
-    std::vector<float> padded[2];
-    for (int ch = 0; ch < 2; ++ch)
-    {
-        padded[ch].assign ((size_t) total, 0.0f);
-        std::copy (drums.getReadPointer (std::min (ch, drums.getNumChannels() - 1)),
-                   drums.getReadPointer (std::min (ch, drums.getNumChannels() - 1)) + length, padded[ch].begin() + border);
-    }
-    std::vector<float> fade ((size_t) chunk, 1.0f);
-    for (int i = 0; i < step; ++i)
-    {
-        fade[(size_t) i] = (float) i / (float) (step - 1);
-        fade[(size_t) (chunk - 1 - i)] = fade[(size_t) i];
-    }
-
-    // Only the wanted parts are kept (a full song's stems take a lot of memory), summed straight into
-    // the output and divided by the total fade weight at the end.
-    std::vector<juce::AudioBuffer<float>> parts ((size_t) numDrumParts);
+    Spectrogram spectrogram (splitModel.fftOrder, splitModel.hop, (int) dims[2], (int) dims[3]);
+    std::vector<int> parts;
     for (auto part : wanted)
-    {
-        parts[(size_t) part].setSize (2, length);
-        parts[(size_t) part].clear();
-    }
-    std::vector<float> weight ((size_t) total, 0.0f), input, output, stem[2];
-    const size_t stemSize = (size_t) 4 * (size_t) session.dimF * (size_t) session.dimT;
-    const int lastStart = total - chunk;
-
-    for (int start = 0; start <= lastStart; start += step)
-    {
-        if (shouldCancel && shouldCancel())
-            return {};
-
-        const float* chunkAudio[] { padded[0].data() + start, padded[1].data() + start };
-        spectrogram.forward (chunkAudio, input);
-        if (! session.run (input, output, error))
-            return {};
-
-        // The part of this chunk that lies inside the song.
-        const int from = std::max (0, border - start), to = std::min (chunk, border + length - start);
-        for (int part = 0; part < numDrumParts; ++part)
-        {
-            auto& buffer = parts[(size_t) part];
-            if (buffer.getNumSamples() == 0 || from >= to)
-                continue;
-            spectrogram.inverse (output.data() + (size_t) part * stemSize, stem);
-            for (int ch = 0; ch < 2; ++ch)
-            {
-                float* out = buffer.getWritePointer (ch, start - border);
-                for (int i = from; i < to; ++i)
-                    out[i] += stem[ch][(size_t) i] * fade[(size_t) i];
-            }
-        }
-        for (int i = 0; i < chunk; ++i)
-            weight[(size_t) (start + i)] += fade[(size_t) i];
-
-        if (progress)
-            progress ((float) (start + step) / (float) (lastStart + step));
-    }
-
-    for (auto& buffer : parts)
-        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
-        {
-            float* out = buffer.getWritePointer (ch);
-            for (int i = 0; i < length; ++i)
-            {
-                const float w = weight[(size_t) (border + i)];
-                out[i] = w > 1e-6f ? out[i] / w : 0.0f;
-            }
-        }
-    return parts;
+        parts.push_back ((int) part);
+    // Chunks overlap by half: every sample is covered twice.
+    auto result = runChunked (session, spectrogram, numDrumParts, drums, spectrogram.chunkLength() / 2, parts,
+                              progress, shouldCancel, error);
+    return result;
    #else
     juce::ignoreUnused (drums, wanted, progress, shouldCancel);
     error = "Built without AI separation";

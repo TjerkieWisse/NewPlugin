@@ -33,7 +33,7 @@ The whole kit (every variation, the hit map and the waveform) is saved inside yo
 
 ## How it works
 
-0. **Separate the drums (AI).** An MDX-Net drum separation model, run on the CPU with ONNX Runtime, removes everything that isn't drums. The song is processed in 12-second chunks with overlapping edges so chunk borders never land in the output.
+0. **Separate the drums (AI).** BS-RoFormer SW, a band-split transformer model, run on the CPU with ONNX Runtime, removes everything that isn't drums. The song is processed in 4-second chunks that are cross-faded over half a second. (The model was trained on 13-second chunks, but its memory use grows with the square of the chunk length: over 14 GB at 13 s, about 3 GB at 4 s, with a result within −22 dB of the 13 s one.)
 0. **Split the kit (AI).** A second model (DrumSep, MDX23C) splits the drum stem into kick, snare, hi-hat and more, in 3-second chunks that overlap by half and are cross-faded. Every step below runs on the whole drum stem and on each part. The whole drum stem decides what the drums are (which pads, which variations); each sound is then swapped for the same drum from a part when the two clearly match (their first 120 ms correlate at 0.8 or more), which is that sound without whatever was layered on it. So a hat ringing on top of a clap, or a hat on every kick, no longer ends up in the other drum. The parts only fill in what the drum stem lacks, such as an open hat that only ever rings on top of a clap. Going by the drum stem first matters for electronic and heavily processed drums, where the split model, trained mostly on acoustic kits, can put a drum in the wrong part.
 1. **Find the hits.** Spectral-flux onset detection, then each hit is pinned to the sample by looking for the sharpest energy rise in three frequency bands. That way a quiet hat over a loud bass line is still placed exactly.
 2. **Name them.** For every hit it measures the energy the hit *adds* compared with just before it (so bass and chords ringing underneath are ignored): low end, mids, top, noisiness, how long the top end rings, and whether there are several quick bursts (a clap). A kick and a hat landing together counts as both.
@@ -47,7 +47,7 @@ The whole kit (every variation, the hit map and the waveform) is saved inside yo
 
 - **Full songs** come out clean thanks to the AI separation, even sample-based tracks where the music loops behind every drum hit.
 - **Drum loops, drum stems and beats with clear drums** come out very clean with the AI on or off.
-- The AI steps take a few minutes for a full song on a laptop CPU, most of it splitting the kit (roughly 1 to 2 times the song's length on 4 cores; faster with more cores).
+- The AI steps take several minutes for a full song on a laptop CPU (on 4 cores roughly 2 to 3 times the song's length to separate, plus about 2 times to split; faster with more cores), and need about 3 GB of memory while separating.
 - **Layered drums** (a snare with an open hat on top, a kick with a hat) are mostly separated by the AI split. On top of that (and without the split model): KITNAP builds each sound from the hits where that drum plays alone, and if a drum is *always* layered, it subtracts a clean copy of the other drum (taken from elsewhere in the track) sample-accurately. When the other drum never plays alone (e.g. an open hat that only ever lands on the clap), KITNAP models the top end as two decays: the clap's own, which fades with its body, and the slower ring of the hat. Once the clap's body has died away it fits the hat's ring, extends it back to the start and removes it from under the clap. Past that point the hat is all that's left, so the sound ends there and the clap's own tail is continued with noise shaped like the clap itself. That way the sizzle that kept going after the clap is gone. The hat that was taken out isn't thrown away: if the track has no open hat of its own, it becomes the open hat pad. The very start of the hat stays, since it lands on (and is masked by) the clap's attack. Sounds that are layered by design (a snare and clap stacked into one sample) stay as you hear them.
 
 > Sounds pulled from commercial songs are fine for practice and personal use, but clear samples before releasing music with them.
@@ -70,13 +70,13 @@ Every push also builds the installers and raw plugins; they're under *Artifacts*
 
 ### The AI files
 
-ONNX Runtime and the separation model ship inside the plugin (`Contents/Resources` in the bundle, or `Resources/` next to the binary). The drum split model (`kitnap_drumsep.onnx`, 440 MB) is installed once in a shared folder: `C:\ProgramData\KITNAP` on Windows, `/Library/Application Support/KITNAP` on macOS, `~/.config/KITNAP` on Linux. KITNAP loads the runtime only when needed and never links against it, so if the files are missing or can't load (e.g. on a very old macOS), the AI switch shows **N/A** and everything else keeps working. Without the split model, the AI only separates the drums from the song and the kit is built from the whole drum stem.
+ONNX Runtime ships inside the plugin (`Contents/Resources` in the bundle, or `Resources/` next to the binary). The models (`kitnap_drums_sw.onnx`, 210 MB, and `kitnap_drumsep.onnx`, 440 MB) are installed once in a shared folder: `C:\ProgramData\KITNAP` on Windows, `/Library/Application Support/KITNAP` on macOS, `~/.config/KITNAP` on Linux. KITNAP loads the runtime only when needed and never links against it, so if the files are missing or can't load (e.g. on a very old macOS), the AI switch shows **N/A** and everything else keeps working. Without the split model, the AI only separates the drums from the song and the kit is built from the whole drum stem.
 
 The models:
-- **Separation:** the MDX-Net drums model by KUIELab (Music Demixing Challenge 2021), as distributed by the UVR project. Any MDX-Net-style model with a `[batch, 4, freq, time]` input, a 4096-point FFT and a hop of 1024 works as a drop-in `kitnap_drums.onnx`.
+- **Separation:** BS-RoFormer SW (6 stems: bass, drums, other, vocals, guitar, piano; weights released by jarredou), downloaded from the [mixdown-models](https://github.com/mogonzal/mixdown-models/releases/tag/bs-roformer-sw-v1) mirror (checksum verified) and converted by `tools/export_sw.py`, drums only. Input and output `[1, 2, 1025, 345, 2]` (channel, bin, frame, real/imaginary; 2048-point FFT, hop 512).
 - **Drum split:** DrumSep (MDX23C) by aufr33 and jarredou, downloaded from the [mdxnet-infer](https://github.com/openmirlab/mdxnet-infer) mirror (checksum verified) and converted to ONNX by `tools/export_drumsep.py`. Input `[1, 4, 1024, 256]` (2048-point FFT, hop 512), output `[1, 6, 4, 1024, 256]`: kick, snare, toms, hi-hat, ride, crash.
 
-**Before selling KITNAP, sort out the model licences.** The separation model was trained on MUSDB18-HQ, which is licensed for non-commercial use. The DrumSep authors never published licence terms for their weights, so treat them as non-commercial until they give permission. Alternatively, swap in models with a commercial licence.
+**Before selling KITNAP, sort out the model licences.** Neither BS-RoFormer SW's nor DrumSep's authors published licence terms for their weights, so treat them as non-commercial until they give permission. Alternatively, swap in models with a commercial licence.
 
 ## Building it yourself
 
@@ -87,7 +87,7 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release --parallel
 ```
 
-The plugins end up in `build/KITNAP_artefacts/Release/`. The build downloads ONNX Runtime 1.20.1 and the models (checksums verified) and copies the runtime and separation model into each plugin. Converting the drum split model needs Python with PyTorch (`pip install torch onnx onnxruntime pyyaml numpy`); without it the build continues without the split. The converted model lands in `build/kitnap-ai/kitnap_drumsep.onnx`: copy it into the shared folder above to use it with a self-built plugin. Pass `-DKITNAP_WITH_AI=OFF` to build without any AI, or `-DKITNAP_WITH_DRUM_SPLIT=OFF` to skip only the split.
+The plugins end up in `build/KITNAP_artefacts/Release/`. The build downloads ONNX Runtime 1.20.1 and the models (checksums verified), copies the runtime into each plugin, and converts the models to ONNX, which needs Python with PyTorch (`pip install torch onnx onnxruntime pyyaml numpy safetensors BS-RoFormer==0.4.1`); without it the build continues without AI models. The converted models land in `build/kitnap-ai/`: copy them into the shared folder above to use them with a self-built plugin. Pass `-DKITNAP_WITH_AI=OFF` to build without any AI, or `-DKITNAP_WITH_DRUM_SPLIT=OFF` to skip only the split.
 
 ### Tests
 

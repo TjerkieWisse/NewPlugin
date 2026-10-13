@@ -76,8 +76,8 @@ set(KITNAP_DEFINITIONS
     JUCE_USE_WINDOWS_MEDIA_FORMAT=1
     JUCE_VST3_CAN_REPLACE_VST2=0)
 
-# Sets up a target to use AI separation: ONNX Runtime headers, and the runtime + model copied to
-# `resources` (plus the drum split model with WITH_SPLIT).
+# Sets up a target to use AI separation: ONNX Runtime headers, and the runtime copied to
+# `resources` (plus the models with WITH_MODELS).
 function(kitnap_use_ai target resources)
     if(KITNAP_AI_AVAILABLE)
         target_include_directories(${target} PRIVATE "${KITNAP_ORT_INCLUDE_DIR}")
@@ -91,7 +91,7 @@ endfunction()
 target_compile_definitions(KITNAP PUBLIC ${KITNAP_DEFINITIONS})
 kitnap_use_ai(KITNAP "")
 
-# The runtime and model go into Contents/Resources of every bundle, or Resources/ next to the binary.
+# The runtime goes into Contents/Resources of every bundle, or Resources/ next to the binary.
 foreach(format IN LISTS KITNAP_FORMATS)
     set(format_target KITNAP_${format})
     if(format STREQUAL "VST3" OR format STREQUAL "AU" OR (APPLE AND format STREQUAL "Standalone"))
@@ -118,7 +118,7 @@ if(KITNAP_BUILD_TESTS)
         Source/separation/DrumSeparator.cpp)
     target_include_directories(KitnapAnalyzerTest PRIVATE Source)
     target_compile_definitions(KitnapAnalyzerTest PRIVATE ${KITNAP_DEFINITIONS})
-    kitnap_use_ai(KitnapAnalyzerTest "$<TARGET_FILE_DIR:KitnapAnalyzerTest>/Resources" WITH_SPLIT)
+    kitnap_use_ai(KitnapAnalyzerTest "$<TARGET_FILE_DIR:KitnapAnalyzerTest>/Resources" WITH_MODELS)
     target_link_libraries(KitnapAnalyzerTest
         PRIVATE
             juce::juce_audio_formats
@@ -140,7 +140,7 @@ if(KITNAP_BUILD_SCREENSHOT)
         Source/ui/WaveformView.cpp
         Source/ui/PadComponent.cpp)
     target_include_directories(KitnapScreenshot PRIVATE Source)
-    kitnap_use_ai(KitnapScreenshot "$<TARGET_FILE_DIR:KitnapScreenshot>/Resources" WITH_SPLIT)
+    kitnap_use_ai(KitnapScreenshot "$<TARGET_FILE_DIR:KitnapScreenshot>/Resources" WITH_MODELS)
     target_compile_definitions(KitnapScreenshot PRIVATE ${KITNAP_DEFINITIONS} JucePlugin_Name="KITNAP"
         JUCE_STANDALONE_APPLICATION=1 JUCE_MODAL_LOOPS_PERMITTED=1)
     target_link_libraries(KitnapScreenshot PRIVATE juce::juce_audio_utils juce::juce_dsp

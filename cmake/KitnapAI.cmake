@@ -1,4 +1,5 @@
-# Downloads ONNX Runtime and the drum separation model, and copies both into the built plugins.
+# Downloads ONNX Runtime and the AI models, converts the models to ONNX, and copies the runtime into
+# the built plugins.
 #
 # The plugin loads ONNX Runtime at run time (it is never linked), so a plugin without these files
 # still works: it just skips AI separation.
@@ -23,13 +24,8 @@ else()
     set(_ort_library "lib/libonnxruntime.so.${KITNAP_ORT_VERSION}")
 endif()
 
-# MDX-Net drums model (KUIELab, Music Demixing Challenge 2021), as distributed by the UVR project.
-set(KITNAP_MODEL_URL "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/kuielab_a_drums.onnx")
-set(KITNAP_MODEL_HASH "40f586b7091934dd6f5563f0cba8f14bad57ce88440da1098bf388ea716c2901")
-
 set(_ai_dir "${CMAKE_BINARY_DIR}/kitnap-ai")
 set(_ort_dir "${_ai_dir}/${_ort_package}")
-set(KITNAP_MODEL_FILE "${_ai_dir}/kitnap_drums.onnx")
 
 function(_kitnap_download url file hash)
     if(EXISTS "${file}")
@@ -62,9 +58,6 @@ endfunction()
 
 set(_kitnap_download_failed FALSE)
 _kitnap_download("${KITNAP_ORT_BASE_URL}/${_ort_archive}" "${_ai_dir}/${_ort_archive}" "${_ort_hash}")
-if(NOT _kitnap_download_failed)
-    _kitnap_download("${KITNAP_MODEL_URL}" "${KITNAP_MODEL_FILE}" "${KITNAP_MODEL_HASH}")
-endif()
 
 if(_kitnap_download_failed)
     set(KITNAP_AI_AVAILABLE FALSE)
@@ -79,11 +72,57 @@ set(KITNAP_AI_AVAILABLE TRUE)
 set(KITNAP_ORT_INCLUDE_DIR "${_ort_dir}/include")
 set(KITNAP_ORT_LIBRARY "${_ort_dir}/${_ort_library}")
 
+# The models are converted to ONNX at configure time, which needs Python with torch, onnx,
+# onnxruntime, numpy, pyyaml, safetensors and BS-RoFormer==0.4.1. Already converted models can be
+# passed instead with -DKITNAP_SEPARATION_ONNX=<file> and -DKITNAP_DRUMSEP_ONNX=<file>. They are
+# hundreds of MB, so they aren't copied into every plugin: the installers put them in a shared
+# folder once (see DrumSeparator.h).
+find_package(Python3 COMPONENTS Interpreter)
+
+# _kitnap_convert(<output> <script> <inputs...>): runs tools/<script> <inputs...> <output>.
+function(_kitnap_convert output script)
+    if(NOT Python3_FOUND)
+        message(WARNING "KITNAP: Python not found, so ${output} can't be converted")
+        return()
+    endif()
+    get_filename_component(_name "${output}" NAME)
+    message(STATUS "KITNAP: converting ${_name} to ONNX")
+    execute_process(
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/${script}" ${ARGN} "${output}.part"
+        RESULT_VARIABLE _result
+        OUTPUT_VARIABLE _output
+        ERROR_VARIABLE _output)
+    if(_result EQUAL 0)
+        file(RENAME "${output}.part" "${output}")
+    else()
+        file(REMOVE "${output}.part")
+        message(WARNING "KITNAP: converting ${_name} failed (pip install torch onnx onnxruntime numpy pyyaml safetensors BS-RoFormer==0.4.1):\n${_output}")
+    endif()
+endfunction()
+
+# Drum separation: BS-RoFormer SW (6 stems: bass, drums, other, vocals, guitar, piano; weights
+# released by jarredou), of which only the drums are exported.
+set(KITNAP_SEPARATION_ONNX "" CACHE FILEPATH "Already converted drum separation model (kitnap_drums_sw.onnx)")
+set(KITNAP_SW_URL "https://github.com/mogonzal/mixdown-models/releases/download/bs-roformer-sw-v1/bs_roformer_sw.safetensors")
+set(KITNAP_SW_HASH "56c131428745d83d63f72293d237fdbb56f40d8e4b6980cbcde70e28a9f7330f")
+set(KITNAP_MODEL_FILE "${_ai_dir}/kitnap_drums_sw.onnx")
+
+if(KITNAP_SEPARATION_ONNX)
+    configure_file("${KITNAP_SEPARATION_ONNX}" "${KITNAP_MODEL_FILE}" COPYONLY)
+elseif(NOT EXISTS "${KITNAP_MODEL_FILE}")
+    set(_kitnap_download_failed FALSE)
+    _kitnap_download("${KITNAP_SW_URL}" "${_ai_dir}/bs_roformer_sw.safetensors" "${KITNAP_SW_HASH}")
+    if(NOT _kitnap_download_failed)
+        _kitnap_convert("${KITNAP_MODEL_FILE}" export_sw.py "${_ai_dir}/bs_roformer_sw.safetensors")
+    endif()
+endif()
+set(KITNAP_SEPARATION_AVAILABLE FALSE)
+if(EXISTS "${KITNAP_MODEL_FILE}")
+    set(KITNAP_SEPARATION_AVAILABLE TRUE)
+endif()
+
 # Drum split model: DrumSep (MDX23C) by aufr33 & jarredou, splitting the drum stem into kick, snare,
-# toms, hi-hat, ride and crash. The checkpoint is converted to ONNX at configure time, which needs
-# Python with torch, onnx, onnxruntime, pyyaml and numpy; or pass an already converted model with
-# -DKITNAP_DRUMSEP_ONNX=<file>. At 440 MB it isn't copied into every plugin: the installers put it
-# in a shared folder once (see DrumSeparator.h).
+# toms, hi-hat, ride and crash.
 set(KITNAP_DRUMSEP_ONNX "" CACHE FILEPATH "Already converted drum split model (kitnap_drumsep.onnx)")
 set(KITNAP_DRUMSEP_URL "https://github.com/openmirlab/mdxnet-infer/releases/download/weights-drumsep-v1/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059")
 set(KITNAP_DRUMSEP_CKPT_HASH "d2a4aa53eb584d21eead358a4e66d1882ad182911be018f052b5da73be9096d0")
@@ -94,27 +133,13 @@ if(KITNAP_WITH_DRUM_SPLIT)
     if(KITNAP_DRUMSEP_ONNX)
         configure_file("${KITNAP_DRUMSEP_ONNX}" "${KITNAP_SPLIT_MODEL_FILE}" COPYONLY)
     elseif(NOT EXISTS "${KITNAP_SPLIT_MODEL_FILE}")
+        set(_kitnap_download_failed FALSE)
         _kitnap_download("${KITNAP_DRUMSEP_URL}.ckpt" "${_ai_dir}/drumsep.ckpt" "${KITNAP_DRUMSEP_CKPT_HASH}")
         if(NOT _kitnap_download_failed)
             _kitnap_download("${KITNAP_DRUMSEP_URL}.yaml" "${_ai_dir}/drumsep.yaml" "${KITNAP_DRUMSEP_YAML_HASH}")
         endif()
-        find_package(Python3 COMPONENTS Interpreter)
-        if(NOT _kitnap_download_failed AND Python3_FOUND)
-            message(STATUS "KITNAP: converting the drum split model to ONNX")
-            execute_process(
-                COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/export_drumsep.py"
-                        "${_ai_dir}/drumsep.ckpt" "${_ai_dir}/drumsep.yaml" "${KITNAP_SPLIT_MODEL_FILE}.part"
-                RESULT_VARIABLE _export_result
-                OUTPUT_VARIABLE _export_output
-                ERROR_VARIABLE _export_output)
-            if(_export_result EQUAL 0)
-                file(RENAME "${KITNAP_SPLIT_MODEL_FILE}.part" "${KITNAP_SPLIT_MODEL_FILE}")
-            else()
-                file(REMOVE "${KITNAP_SPLIT_MODEL_FILE}.part")
-                message(WARNING "KITNAP: converting the drum split model failed (pip install torch onnx onnxruntime pyyaml numpy):\n${_export_output}")
-            endif()
-        elseif(NOT Python3_FOUND)
-            message(WARNING "KITNAP: Python not found, building without the drum split model")
+        if(NOT _kitnap_download_failed)
+            _kitnap_convert("${KITNAP_SPLIT_MODEL_FILE}" export_drumsep.py "${_ai_dir}/drumsep.ckpt" "${_ai_dir}/drumsep.yaml")
         endif()
     endif()
 endif()
@@ -123,16 +148,20 @@ if(EXISTS "${KITNAP_SPLIT_MODEL_FILE}")
     set(KITNAP_SPLIT_AVAILABLE TRUE)
 endif()
 
-# Copies the runtime and model into `destination` (a generator expression is fine) after `target` builds.
-# With `with_split`, the drum split model is copied too.
+# Copies the runtime into `destination` (a generator expression is fine) after `target` builds.
+# With WITH_MODELS, the models are copied too (for the tests; plugins find them in the shared folder).
 function(kitnap_bundle_ai target destination)
-    cmake_parse_arguments(_bundle "WITH_SPLIT" "" "" ${ARGN})
+    cmake_parse_arguments(_bundle "WITH_MODELS" "" "" ${ARGN})
     add_custom_command(TARGET ${target} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory "${destination}"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "${KITNAP_ORT_LIBRARY}" "${destination}/"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${KITNAP_MODEL_FILE}" "${destination}/"
         VERBATIM)
-    if(_bundle_WITH_SPLIT AND KITNAP_SPLIT_AVAILABLE)
+    if(_bundle_WITH_MODELS AND KITNAP_SEPARATION_AVAILABLE)
+        add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${KITNAP_MODEL_FILE}" "${destination}/"
+            VERBATIM)
+    endif()
+    if(_bundle_WITH_MODELS AND KITNAP_SPLIT_AVAILABLE)
         add_custom_command(TARGET ${target} POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different "${KITNAP_SPLIT_MODEL_FILE}" "${destination}/"
             VERBATIM)

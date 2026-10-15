@@ -11,7 +11,7 @@ cp -R "$here/LV2/KITNAP.lv2" ~/.lv2/
 cp -R "$here/Standalone" ~/.local/share/kitnap/
 ln -sf ~/.local/share/kitnap/Standalone/KITNAP ~/.local/bin/kitnap
 mkdir -p ~/.config/KITNAP
-for model in kitnap_drums_sw.onnx kitnap_drumsep.onnx; do
+for model in kitnap_drums_sw.onnx kitnap_drumsep5.onnx; do
     if [ -f "$here/$model" ]; then cp "$here/$model" ~/.config/KITNAP/; fi
 done
 

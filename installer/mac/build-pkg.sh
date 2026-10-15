@@ -45,7 +45,7 @@ component app "$artefacts/Standalone/KITNAP.app" "/Applications"
 
 # The AI models are shared by the plugins and the app: /Library/Application Support/KITNAP.
 mkdir -p "$work/model-files/KITNAP"
-cp "$ai/kitnap_drums_sw.onnx" "$ai/kitnap_drumsep.onnx" "$work/model-files/KITNAP/"
+cp "$ai/kitnap_drums_sw.onnx" "$ai/kitnap_drumsep5.onnx" "$work/model-files/KITNAP/"
 component models "$work/model-files/KITNAP" "/Library/Application Support"
 
 sed "s/@VERSION@/$version/g" "$here/distribution.xml" > "$work/distribution.xml"

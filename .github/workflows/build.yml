@@ -12,15 +12,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Only the Mac build for now (GitHub Actions minutes). The Windows and Linux steps below still
+        # work: add these back to build their installers too.
+        #   - name: Windows
+        #     os: windows-2022
+        #     test: build/KitnapAnalyzerTest_artefacts/Release/KitnapAnalyzerTest.exe
+        #   - name: Linux
+        #     os: ubuntu-22.04
+        #     test: build/KitnapAnalyzerTest_artefacts/Release/KitnapAnalyzerTest
         include:
           - name: macOS
             os: macos-14
-            test: build/KitnapAnalyzerTest_artefacts/Release/KitnapAnalyzerTest
-          - name: Windows
-            os: windows-2022
-            test: build/KitnapAnalyzerTest_artefacts/Release/KitnapAnalyzerTest.exe
-          - name: Linux
-            os: ubuntu-22.04
             test: build/KitnapAnalyzerTest_artefacts/Release/KitnapAnalyzerTest
 
     steps:
@@ -57,7 +59,7 @@ jobs:
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE="$(which python)"
           test -f build/kitnap-ai/kitnap_drums_sw.onnx
-          test -f build/kitnap-ai/kitnap_drumsep.onnx
+          test -f build/kitnap-ai/kitnap_drumsep5.onnx
 
       - name: Build
         run: cmake --build build --config Release --parallel 4
@@ -100,7 +102,7 @@ jobs:
           staging="KITNAP-$KITNAP_VERSION-Linux"
           mkdir -p "$staging" build/installer
           cp -R build/KITNAP_artefacts/Release/VST3 build/KITNAP_artefacts/Release/LV2 build/KITNAP_artefacts/Release/Standalone "$staging/"
-          cp installer/linux/install.sh build/kitnap-ai/kitnap_drums_sw.onnx build/kitnap-ai/kitnap_drumsep.onnx "$staging/"
+          cp installer/linux/install.sh build/kitnap-ai/kitnap_drums_sw.onnx build/kitnap-ai/kitnap_drumsep5.onnx "$staging/"
           tar czf "build/installer/$staging.tar.gz" "$staging"
 
       - name: Upload installer

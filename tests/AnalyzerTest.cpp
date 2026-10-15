@@ -7,7 +7,7 @@
 //        KitnapAnalyzerTest --layered-always [out]     ...and the open hat never plays alone
 //        KitnapAnalyzerTest --write-mix beat.wav     just writes the synthetic test beat
 //        KitnapAnalyzerTest --separate song.mp3 drums.wav   writes the AI-separated drum stem
-//        KitnapAnalyzerTest --split drums.wav folder         writes the six parts of a drum stem (kick, snare, ...)
+//        KitnapAnalyzerTest --split drums.wav folder         writes the five parts of a drum stem (kick, snare, ...)
 //        KitnapAnalyzerTest --hits file.wav                  lists the detected hits (sample position and drum)
 //        KitnapAnalyzerTest --file-ai song.mp3 [out]         the plugin's full pipeline: separate, split, analyse
 //        KitnapAnalyzerTest --file-parts drums.wav folder [out]  the last step only, from --split's stems
@@ -316,11 +316,11 @@ int splitFile (const juce::File& in, const juce::File& folder)
         return 1;
     }
     using Part = DrumSeparator::DrumPart;
-    const auto parts = splitDrums (drums, { Part::kick, Part::snare, Part::toms, Part::hihat, Part::ride, Part::crash });
+    const auto parts = splitDrums (drums, { Part::kick, Part::snare, Part::toms, Part::hihat, Part::cymbals });
     if (parts.empty())
         return 1;
     folder.createDirectory();
-    const char* names[] { "kick", "snare", "toms", "hihat", "ride", "crash" };
+    const char* names[] { "kick", "snare", "toms", "hihat", "cymbals" };
     for (int part = 0; part < DrumSeparator::numDrumParts; ++part)
         writeStem (parts[(size_t) part], folder.getChildFile (juce::String (names[part]) + ".wav"));
     return 0;

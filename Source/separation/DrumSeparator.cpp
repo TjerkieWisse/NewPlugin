@@ -16,7 +16,7 @@ struct ModelSpec
     int fftOrder, hop;
 };
 const ModelSpec drumsModel { "kitnap_drums_sw.onnx", 11, 512 }; // BS-RoFormer SW, drums only
-const ModelSpec splitModel { "kitnap_drumsep.onnx", 11, 512 };
+const ModelSpec splitModel { "kitnap_drumsep5.onnx", 11, 512 }; // DrumSep 5 stems (MDX23C)
 
 juce::Array<juce::File> searchFolders()
 {

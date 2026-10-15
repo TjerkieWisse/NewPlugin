@@ -49,7 +49,7 @@ Source: "{#Artefacts}\VST3\KITNAP.vst3\*"; DestDir: "{commoncf64}\VST3\KITNAP.vs
 Source: "{#Artefacts}\Standalone\*"; DestDir: "{app}"; Components: standalone; Flags: ignoreversion recursesubdirs createallsubdirs
 ; The AI models are shared by the plugin and the app, so they're installed once.
 Source: "{#AIFiles}\kitnap_drums_sw.onnx"; DestDir: "{commonappdata}\KITNAP"; Components: ai; Flags: ignoreversion nocompression
-Source: "{#AIFiles}\kitnap_drumsep.onnx"; DestDir: "{commonappdata}\KITNAP"; Components: ai; Flags: ignoreversion nocompression
+Source: "{#AIFiles}\kitnap_drumsep5.onnx"; DestDir: "{commonappdata}\KITNAP"; Components: ai; Flags: ignoreversion nocompression
 
 [Icons]
 Name: "{autoprograms}\KITNAP"; Filename: "{app}\KITNAP.exe"; Components: standalone

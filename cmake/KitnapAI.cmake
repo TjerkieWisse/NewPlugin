@@ -121,25 +121,27 @@ if(EXISTS "${KITNAP_MODEL_FILE}")
     set(KITNAP_SEPARATION_AVAILABLE TRUE)
 endif()
 
-# Drum split model: DrumSep (MDX23C) by aufr33 & jarredou, splitting the drum stem into kick, snare,
-# toms, hi-hat, ride and crash.
-set(KITNAP_DRUMSEP_ONNX "" CACHE FILEPATH "Already converted drum split model (kitnap_drumsep.onnx)")
-set(KITNAP_DRUMSEP_URL "https://github.com/openmirlab/mdxnet-infer/releases/download/weights-drumsep-v1/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059")
-set(KITNAP_DRUMSEP_CKPT_HASH "d2a4aa53eb584d21eead358a4e66d1882ad182911be018f052b5da73be9096d0")
-set(KITNAP_DRUMSEP_YAML_HASH "17d1649a227f841165bdb4c11a42082898192a1ea3ceab7e7e0b9293d6589dd6")
-set(KITNAP_SPLIT_MODEL_FILE "${_ai_dir}/kitnap_drumsep.onnx")
+# Drum split model: DrumSep 5 stems v2025 (MDX23C) by jarredou, splitting the drum stem into kick,
+# snare, toms, hi-hat and cymbals. Its original release is gone; this copy is from the DrumToMIDI
+# project (the hashes pin that copy, there are no official ones).
+set(KITNAP_DRUMSEP_ONNX "" CACHE FILEPATH "Already converted drum split model (kitnap_drumsep5.onnx)")
+set(KITNAP_DRUMSEP_CKPT_URL "https://media.githubusercontent.com/media/EverlastEngineering/DrumToMIDI/main/mdx_models/drumsep_5stems_mdx23c_jarredou.ckpt")
+set(KITNAP_DRUMSEP_YAML_URL "https://raw.githubusercontent.com/EverlastEngineering/DrumToMIDI/main/mdx_models/config_mdx23c.yaml")
+set(KITNAP_DRUMSEP_CKPT_HASH "1f8e636fb674b88a52c8399fde9a4ebe2b72b065ca07eed4e03ab1c9f0bfb2e0")
+set(KITNAP_DRUMSEP_YAML_HASH "d2962f43d6682e8ea84e77fb50a2680e4641ba1749ee95f8ea6e96bba3278944")
+set(KITNAP_SPLIT_MODEL_FILE "${_ai_dir}/kitnap_drumsep5.onnx")
 
 if(KITNAP_WITH_DRUM_SPLIT)
     if(KITNAP_DRUMSEP_ONNX)
         configure_file("${KITNAP_DRUMSEP_ONNX}" "${KITNAP_SPLIT_MODEL_FILE}" COPYONLY)
     elseif(NOT EXISTS "${KITNAP_SPLIT_MODEL_FILE}")
         set(_kitnap_download_failed FALSE)
-        _kitnap_download("${KITNAP_DRUMSEP_URL}.ckpt" "${_ai_dir}/drumsep.ckpt" "${KITNAP_DRUMSEP_CKPT_HASH}")
+        _kitnap_download("${KITNAP_DRUMSEP_CKPT_URL}" "${_ai_dir}/drumsep5.ckpt" "${KITNAP_DRUMSEP_CKPT_HASH}")
         if(NOT _kitnap_download_failed)
-            _kitnap_download("${KITNAP_DRUMSEP_URL}.yaml" "${_ai_dir}/drumsep.yaml" "${KITNAP_DRUMSEP_YAML_HASH}")
+            _kitnap_download("${KITNAP_DRUMSEP_YAML_URL}" "${_ai_dir}/drumsep5.yaml" "${KITNAP_DRUMSEP_YAML_HASH}")
         endif()
         if(NOT _kitnap_download_failed)
-            _kitnap_convert("${KITNAP_SPLIT_MODEL_FILE}" export_drumsep.py "${_ai_dir}/drumsep.ckpt" "${_ai_dir}/drumsep.yaml")
+            _kitnap_convert("${KITNAP_SPLIT_MODEL_FILE}" export_drumsep.py "${_ai_dir}/drumsep5.ckpt" "${_ai_dir}/drumsep5.yaml")
         endif()
     endif()
 endif()

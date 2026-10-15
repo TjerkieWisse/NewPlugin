@@ -34,10 +34,10 @@ public:
                                               juce::String& error);
 
     // Phase 3: a second model splits the drum stem into its parts, in this order.
-    enum class DrumPart { kick, snare, toms, hihat, ride, crash };
-    static constexpr int numDrumParts = 6;
+    enum class DrumPart { kick, snare, toms, hihat, cymbals };
+    static constexpr int numDrumParts = 5;
 
-    // True when the drum split model ("kitnap_drumsep.onnx") is installed too.
+    // True when the drum split model ("kitnap_drumsep5.onnx") is installed too.
     static bool canSplit();
 
     // Splits a drum stem (stereo, at modelSampleRate) into its parts. Returns numDrumParts buffers,

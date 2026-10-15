@@ -1,6 +1,7 @@
-# Converts the DrumSep MDX23C checkpoint (aufr33 & jarredou) into the ONNX model KITNAP runs to split
-# a drum stem into kick, snare, toms, hi-hat, ride and crash. The STFT is left out of the model:
-# the plugin computes it (n_fft 2048, hop 512, the first 1024 bins, 256 frames per chunk).
+# Converts a DrumSep MDX23C checkpoint (jarredou's 5-stem v2025 model: kick, snare, toms, hi-hat,
+# cymbals) into the ONNX model KITNAP runs to split a drum stem into its parts. The STFT is left out
+# of the model: the plugin computes it (n_fft 2048, hop 512, the first dim_f bins, dim_t frames per
+# chunk, both from the config).
 #
 # Usage: python export_drumsep.py <model.ckpt> <model.yaml> <out.onnx>
 # Needs: torch, onnx, pyyaml, numpy (pip install torch onnx pyyaml numpy)
@@ -107,8 +108,9 @@ def main():
     net.eval()
 
     dummy = torch.randn(1, 4, cfg['audio']['dim_f'], cfg['audio']['dim_t'])
-    torch.onnx.export(net, (dummy,), out, input_names=['spectrogram'], output_names=['stems'],
-                      opset_version=17, dynamo=False)
+    with torch.no_grad():
+        torch.onnx.export(net, (dummy,), out, input_names=['spectrogram'], output_names=['stems'],
+                          opset_version=17, dynamo=False)
 
     # Check the exported model against PyTorch.
     import onnxruntime

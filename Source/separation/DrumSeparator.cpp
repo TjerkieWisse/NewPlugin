@@ -4,6 +4,9 @@
 #if KITNAP_HAS_ONNX
  #include <onnxruntime_c_api.h>
 #endif
+#if JUCE_MAC
+ #include <sys/sysctl.h>
+#endif
 
 namespace kitnap
 {
@@ -105,6 +108,20 @@ private:
 
     juce::DynamicLibrary library;
 };
+
+// How many threads the models run on: one per performance core. Efficiency cores (Apple Silicon)
+// and hyper-threads only slow it down, since every thread waits for the slowest one at each step.
+// The number of threads doesn't change the result.
+int inferenceThreads()
+{
+   #if JUCE_MAC
+    int performanceCores = 0;
+    size_t size = sizeof (performanceCores);
+    if (sysctlbyname ("hw.perflevel0.physicalcpu", &performanceCores, &size, nullptr, 0) == 0 && performanceCores > 0)
+        return performanceCores;
+   #endif
+    return std::max (1, juce::SystemStats::getNumPhysicalCpus());
+}
 
 // Turns an OrtStatus into an error string, releasing it.
 bool failed (const OrtApi* api, OrtStatus* status, juce::String& error)
@@ -255,7 +272,7 @@ struct Session
     bool open (OrtEnv* env, const juce::File& model, juce::String& error)
     {
         if (failed (api, api->CreateSessionOptions (&options), error)) return false;
-        if (failed (api, api->SetIntraOpNumThreads (options, std::max (1, juce::SystemStats::getNumCpus() - 1)), error)) return false;
+        if (failed (api, api->SetIntraOpNumThreads (options, inferenceThreads()), error)) return false;
         if (failed (api, api->SetSessionGraphOptimizationLevel (options, ORT_ENABLE_ALL), error)) return false;
         // Planning all buffers ahead keeps every intermediate tensor alive at once; for attention
         // models that alone is gigabytes.
@@ -408,7 +425,9 @@ std::vector<juce::AudioBuffer<float>> runChunked (Session& session, Spectrogram&
     const size_t stemSize = session.outputSize / (size_t) numStems;
     const int lastStart = total - chunk;
 
-    for (int start = 0; start <= lastStart; start += step)
+    // Chunks from the end of the song on would only cover padding: skip them.
+    const int songEnd = border + length;
+    for (int start = 0; start <= lastStart && start < songEnd; start += step)
     {
         if (shouldCancel && shouldCancel())
             return {};
@@ -438,7 +457,7 @@ std::vector<juce::AudioBuffer<float>> runChunked (Session& session, Spectrogram&
             weight[(size_t) (start + i)] += fade[(size_t) i];
 
         if (progress)
-            progress ((float) std::min (start + step, lastStart + step) / (float) (lastStart + step));
+            progress ((float) std::min (start + step, songEnd) / (float) songEnd);
     }
 
     for (auto& buffer : stems)

@@ -7,15 +7,14 @@
 
 namespace kitnap
 {
-// AI drum separation: pulls the drum stem out of a full mix with a BS-RoFormer ONNX model,
-// so the analyzer sees the drums without the music around them.
+// The two AI models KITNAP runs: BS-RoFormer SW pulls the drum stem out of a full mix, then the
+// 5-stem drum split model splits that stem into kick, snare, toms, hi-hat and cymbals.
 //
 // ONNX Runtime and the models are looked up next to the plugin binary (in "Resources" or
 // "../Resources", which is Contents/Resources inside a plugin bundle), then in the shared
 // "KITNAP" folder the installer fills (C:\ProgramData, /Library/Application Support, ~/.config).
-// When the runtime or the separation model is missing, isAvailable() is false and KITNAP falls
-// back to analysing the full mix; without the split model, canSplit() is false and the kit is
-// built from the whole drum stem.
+// Both models are needed: when the runtime or either model is missing, isAvailable() is false and
+// KITNAP can't make a kit.
 class DrumSeparator
 {
 public:
@@ -33,12 +32,9 @@ public:
                                               const std::function<bool()>& shouldCancel,
                                               juce::String& error);
 
-    // Phase 3: a second model splits the drum stem into its parts, in this order.
+    // The second model splits the drum stem into its parts, in this order.
     enum class DrumPart { kick, snare, toms, hihat, cymbals };
     static constexpr int numDrumParts = 5;
-
-    // True when the drum split model ("kitnap_drumsep5.onnx") is installed too.
-    static bool canSplit();
 
     // Splits a drum stem (stereo, at modelSampleRate) into its parts. Returns numDrumParts buffers,
     // indexed by DrumPart, where only the wanted ones are filled; an empty vector on failure or cancel.

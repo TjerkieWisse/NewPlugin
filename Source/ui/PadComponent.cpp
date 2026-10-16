@@ -113,11 +113,11 @@ void PadComponent::paint (juce::Graphics& g)
     g.setColour (colour.withAlpha (0.8f));
     g.strokePath (shape, juce::PathStrokeType (1.0f));
 
-    // Footer: how many hits were stacked, and the variation picker.
+    // Footer: how often the sound occurs, and the variation picker.
     g.setFont (theme::font (12.0f));
     g.setColour (theme::textDim);
-    const auto stacked = sample->hitsStacked > 1 ? juce::String (sample->hitsStacked) + " hits stacked" : juce::String ("single hit");
-    g.drawText (stacked + "  " + theme::dot() + "  drag me", footer, juce::Justification::centredLeft);
+    // The sound is one hit from the song; this says how many of the song's hits sound like it.
+    g.drawText (juce::String (sample->hitsStacked) + "x in the song  " + theme::dot() + "  drag me", footer, juce::Justification::centredLeft);
 
     if (variationCount > 1)
     {

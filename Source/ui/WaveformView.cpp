@@ -80,8 +80,8 @@ void WaveformView::paint (juce::Graphics& g)
     juce::String status = kit.message;
     if (kit.status == KitState::Status::analysing)
         status = juce::String (stage == KitState::Stage::separating ? "Separating drums with AI...  "
-                             : stage == KitState::Stage::splitting  ? "Splitting the kit with AI...  "
-                                                                    : "Kidnapping drums...  ")
+                             : stage == KitState::Stage::splitting  ? "Splitting the drums with AI...  "
+                                                                    : "Cutting the sounds...  ")
                  + juce::String (juce::roundToInt (shownProgress * 100.0f)) + "%";
     else if (kit.status == KitState::Status::ready)
         status = kit.message + "   " + theme::dot() + "   click to load another";
@@ -97,10 +97,10 @@ void WaveformView::paint (juce::Graphics& g)
     if (analysing)
     {
         // Scanner sweeping across the song: violet while the AI separates, cyan while it splits the kit,
-        // pink while kidnapping.
+        // pink while cutting the sounds.
         g.reduceClipRegion (inner.withBottom (lanes.getBottom()).toNearestInt());
-        const auto scanColour = stage == KitState::Stage::separating ? theme::forClass (DrumClass::perc)
-                              : stage == KitState::Stage::splitting  ? theme::forClass (DrumClass::hat)
+        const auto scanColour = stage == KitState::Stage::separating ? theme::forClass (DrumClass::toms)
+                              : stage == KitState::Stage::splitting  ? theme::forClass (DrumClass::hihat)
                                                                      : theme::accent;
         const float x = inner.getX() + inner.getWidth() * juce::jlimit (0.0f, 1.0f, shownProgress);
         juce::ColourGradient glow (scanColour.withAlpha (0.0f), x - 80.0f, 0.0f,
@@ -221,8 +221,6 @@ void WaveformView::paintHits (juce::Graphics& g, juce::Rectangle<float> area)
         };
 
         drawHit ((int) hit.drumClass, 1.0f);
-        if (hit.secondaryClass >= 0)
-            drawHit (hit.secondaryClass, 0.7f);
     }
 
     if (elapsed < revealSeconds)

@@ -1,23 +1,20 @@
-// Builds a synthetic beat (drums + bass + chords), runs the analyzer on it and checks that
-// every drum is detected, classified and extracted cleanly.
+// Tests the kit extraction (one pad per part of the AI drum split) and runs the AI models on files.
 //
-// Usage: KitnapAnalyzerTest [output-folder]      writes the extracted kit as WAVs when a folder is given
-//        KitnapAnalyzerTest --file song.wav [out] analyses a real file instead
-//        KitnapAnalyzerTest --layered [output-folder]  the same with layered drums (snare + open hat, kick + hat)
-//        KitnapAnalyzerTest --layered-always [out]     ...and the open hat never plays alone
-//        KitnapAnalyzerTest --write-mix beat.wav     just writes the synthetic test beat
+// Usage: KitnapAnalyzerTest [output-folder]
+//            builds five synthetic drum parts (kick, snare, toms, hi-hat, cymbals), extracts the kit and
+//            checks that every pad gets its own drum, cut out unchanged; writes the kit when a folder is given
+//        KitnapAnalyzerTest --write-mix beat.wav            writes a synthetic beat with bass and chords
 //        KitnapAnalyzerTest --separate song.mp3 drums.wav   writes the AI-separated drum stem
-//        KitnapAnalyzerTest --split drums.wav folder         writes the five parts of a drum stem (kick, snare, ...)
-//        KitnapAnalyzerTest --hits file.wav                  lists the detected hits (sample position and drum)
-//        KitnapAnalyzerTest --file-ai song.mp3 [out]         the plugin's full pipeline: separate, split, analyse
-//        KitnapAnalyzerTest --file-parts drums.wav folder [out]  the last step only, from --split's stems
+//        KitnapAnalyzerTest --split drums.wav folder        writes the five parts of a drum stem (kick.wav, ...)
+//        KitnapAnalyzerTest --file-ai song.mp3 [out]        the plugin's full pipeline: separate, split, extract
+//        KitnapAnalyzerTest --file-parts folder [out]       the last step only, from the parts --split wrote
+//        KitnapAnalyzerTest --hits folder                   lists the hits found in those parts
 
 #include <juce_audio_formats/juce_audio_formats.h>
 #include "analysis/DrumAnalyzer.h"
 #include "separation/DrumSeparator.h"
 #include <cmath>
 #include <iostream>
-#include <map>
 #include <random>
 
 using namespace kitnap;
@@ -26,7 +23,12 @@ namespace
 {
 constexpr double sr = 44100.0;
 constexpr float twoPi = juce::MathConstants<float>::twoPi;
+const char* partFileNames[] { "kick", "snare", "toms", "hihat", "cymbals" };
 
+juce::File arg (const char* path) { return juce::File::getCurrentWorkingDirectory().getChildFile (path); }
+
+//==============================================================================
+// Synthetic drums.
 std::vector<float> noise (int n, unsigned seed)
 {
     std::mt19937 rng (seed);
@@ -48,28 +50,24 @@ void onePoleHighpass (std::vector<float>& v, float hz)
     }
 }
 
-void onePoleLowpass (std::vector<float>& v, float hz)
+// A sine whose pitch falls from start + drop to start, with a click on top.
+std::vector<float> makeDrum (double seconds, float start, float drop, float pitchDecay, float decay, float click)
 {
-    const float a = std::exp (-twoPi * hz / (float) sr);
-    float lp = 0.0f;
-    for (auto& x : v)
-        x = lp = (1.0f - a) * x + a * lp;
-}
-
-std::vector<float> makeKick()
-{
-    const int n = (int) (0.45 * sr);
+    const int n = (int) (seconds * sr);
     std::vector<float> v ((size_t) n);
     float phase = 0.0f;
     for (int i = 0; i < n; ++i)
     {
         const float t = (float) i / (float) sr;
-        const float freq = 48.0f + 110.0f * std::exp (-t * 30.0f);
-        phase += twoPi * freq / (float) sr;
-        v[(size_t) i] = std::sin (phase) * std::exp (-t * 7.0f) + (i < 60 ? 0.4f * (1.0f - (float) i / 60.0f) : 0.0f);
+        phase += twoPi * (start + drop * std::exp (-t * pitchDecay)) / (float) sr;
+        v[(size_t) i] = std::sin (phase) * std::exp (-t * decay) + (i < 60 ? click * (1.0f - (float) i / 60.0f) : 0.0f);
     }
     return v;
 }
+
+std::vector<float> makeKick()      { return makeDrum (0.45, 48.0f, 110.0f, 30.0f, 7.0f, 0.4f); }
+std::vector<float> makeShortKick() { return makeDrum (0.25, 70.0f, 160.0f, 50.0f, 16.0f, 0.9f); }
+std::vector<float> makeTom (bool high) { return makeDrum (0.45, high ? 180.0f : 95.0f, high ? 40.0f : 25.0f, 12.0f, 12.0f, 0.15f); }
 
 std::vector<float> makeSnare()
 {
@@ -85,47 +83,25 @@ std::vector<float> makeSnare()
     return v;
 }
 
-std::vector<float> makeClap()
+// Noise above `highpass`, decaying at `decay` per second.
+std::vector<float> makeMetal (double seconds, float highpass, float decay, unsigned seed)
 {
-    const int n = (int) (0.3 * sr);
-    auto nz = noise (n, 11);
-    onePoleHighpass (nz, 1000.0f);
-    onePoleLowpass (nz, 3500.0f);
-    std::vector<float> v ((size_t) n, 0.0f);
-    const float bursts[] { 0.0f, 0.010f, 0.021f, 0.031f };
+    const int n = (int) (seconds * sr);
+    auto nz = noise (n, seed);
+    onePoleHighpass (nz, highpass);
+    onePoleHighpass (nz, highpass);
+    std::vector<float> v ((size_t) n);
     for (int i = 0; i < n; ++i)
-    {
-        const float t = (float) i / (float) sr;
-        float env = 0.0f;
-        for (float b : bursts)
-            if (t >= b && t < b + 0.0095f)
-                env = std::max (env, std::exp (-(t - b) * 260.0f));
-        if (t >= bursts[3])
-            env = std::max (env, 0.8f * std::exp (-(t - bursts[3]) * 18.0f));
-        v[(size_t) i] = 2.2f * nz[(size_t) i] * env;
-    }
+        v[(size_t) i] = 1.4f * nz[(size_t) i] * std::exp (-(float) i / (float) sr * decay);
     return v;
 }
 
-std::vector<float> makeHat (bool open)
-{
-    const int n = (int) ((open ? 0.5 : 0.08) * sr);
-    auto nz = noise (n, open ? 23u : 19u);
-    onePoleHighpass (nz, 7000.0f);
-    onePoleHighpass (nz, 7000.0f);
-    std::vector<float> v ((size_t) n);
-    for (int i = 0; i < n; ++i)
-    {
-        const float t = (float) i / (float) sr;
-        v[(size_t) i] = 1.4f * nz[(size_t) i] * std::exp (-t * (open ? 7.0f : 70.0f));
-    }
-    return v;
-}
+std::vector<float> makeHat()   { return makeMetal (0.08, 7000.0f, 70.0f, 19); }
+std::vector<float> makeCrash() { return makeMetal (2.5, 3000.0f, 1.8f, 31); }
 
 void add (std::vector<float>& mix, const std::vector<float>& s, int at, float gain)
 {
-    // 5 ms fade at the end, like a properly trimmed sample.
-    const size_t fade = (size_t) (0.005 * sr);
+    const size_t fade = (size_t) (0.005 * sr); // like a properly trimmed sample
     for (size_t i = 0; i < s.size() && at + (int) i < (int) mix.size(); ++i)
     {
         const float f = i + fade > s.size() ? (float) (s.size() - i) / (float) fade : 1.0f;
@@ -133,21 +109,68 @@ void add (std::vector<float>& mix, const std::vector<float>& s, int at, float ga
     }
 }
 
-struct Truth
+juce::AudioBuffer<float> toStereo (const std::vector<float>& mono)
 {
-    int position;
-    DrumClass drumClass;
+    juce::AudioBuffer<float> audio (2, (int) mono.size());
+    for (int ch = 0; ch < 2; ++ch)
+        audio.copyFrom (ch, 0, mono.data(), (int) mono.size());
+    return audio;
+}
+
+struct Beat
+{
+    std::array<std::vector<float>, numDrumClasses> parts;
+    std::array<std::vector<int>, numDrumClasses> hits; // where each part's own hits are
 };
 
-// From `skip` samples on (to judge only the tail, after the attack).
-float bestCorrelation (const std::vector<float>& reference, const juce::AudioBuffer<float>& extracted, int skip = 0)
+// Eight bars at 120 BPM, with two different kicks; the toms play a fill twice and the crash comes twice.
+Beat makeBeat()
+{
+    const int step = (int) (sr * 60.0 / 120.0 / 4.0), bars = 8;
+    const size_t length = (size_t) (step * 16 * bars + 3 * sr);
+    Beat beat;
+    for (auto& p : beat.parts)
+        p.assign (length, 0.0f);
+
+    const auto kick = makeKick(), shortKick = makeShortKick(), snare = makeSnare(), hat = makeHat(), crash = makeCrash();
+    const auto highTom = makeTom (true), lowTom = makeTom (false);
+    auto hit = [&] (DrumClass c, const std::vector<float>& sound, int at, float gain)
+    {
+        add (beat.parts[(size_t) c], sound, at, gain);
+        beat.hits[(size_t) c].push_back (at);
+    };
+
+    for (int bar = 0; bar < bars; ++bar)
+        for (int s = 0; s < 16; ++s)
+        {
+            const int at = (bar * 16 + s) * step;
+            const float humanise = 0.85f + 0.15f * (float) ((bar * 7 + s * 3) % 5) / 4.0f;
+            const bool fill = bar % 4 == 3 && s >= 12;
+            if (s == 0 || s == 10)
+                hit (DrumClass::kick, kick, at, 0.9f * humanise);
+            if (s == 7)
+                hit (DrumClass::kick, shortKick, at, 0.7f * humanise);
+            if ((s == 4 || s == 12) && ! fill)
+                hit (DrumClass::snare, snare, at, 0.7f * humanise);
+            if (fill && s % 2 == 0)
+                hit (DrumClass::toms, s < 14 ? highTom : lowTom, at, 0.8f * humanise);
+            if (s % 2 == 0 && ! fill)
+                hit (DrumClass::hihat, hat, at, 0.25f * humanise);
+            if (bar % 4 == 0 && s == 0)
+                hit (DrumClass::cymbals, crash, at, 0.3f);
+        }
+    return beat;
+}
+
+//==============================================================================
+float bestCorrelation (const std::vector<float>& reference, const juce::AudioBuffer<float>& extracted)
 {
     const int n = std::min ((int) reference.size(), extracted.getNumSamples());
     float best = 0.0f;
-    for (int lag = -100; lag <= 100; ++lag)
+    for (int lag = -200; lag <= 200; ++lag)
     {
         double cross = 0, ea = 0, eb = 0;
-        for (int i = skip; i < n; ++i)
+        for (int i = 0; i < n; ++i)
         {
             const int j = i + lag;
             if (j < 0 || j >= extracted.getNumSamples())
@@ -161,100 +184,17 @@ float bestCorrelation (const std::vector<float>& reference, const juce::AudioBuf
     return best;
 }
 
-void writeKit (const AnalysisResult& result, const juce::File& folder)
+void writeWav (const juce::AudioBuffer<float>& audio, double rate, const juce::File& file)
 {
-    folder.createDirectory();
+    file.deleteFile();
     juce::WavAudioFormat wav;
-    for (int c = 0; c < numDrumClasses; ++c)
-        for (size_t v = 0; v < result.kit[(size_t) c].size(); ++v)
-        {
-            auto& s = result.kit[(size_t) c][v];
-            auto file = folder.getChildFile (juce::String (drumClassName ((DrumClass) c)).replace (" ", "_")
-                                             + "_" + juce::String ((int) v + 1) + ".wav");
-            file.deleteFile();
-            std::unique_ptr<juce::OutputStream> stream (file.createOutputStream().release());
-            if (auto writer = std::unique_ptr<juce::AudioFormatWriter> (
-                    wav.createWriterFor (stream.get(), s.sampleRate, 2, 24, {}, 0)))
-            {
-                stream.release();
-                writer->writeFromAudioSampleBuffer (s.audio, 0, s.audio.getNumSamples());
-            }
-        }
-}
-
-void printKit (const AnalysisResult& result)
-{
-    for (int c = 0; c < numDrumClasses; ++c)
-    {
-        std::cout << "  " << drumClassName ((DrumClass) c) << ": " << result.kit[(size_t) c].size() << " variation(s)";
-        for (auto& s : result.kit[(size_t) c])
-            std::cout << " [" << s.hitsStacked << " hits, " << juce::roundToInt (1000.0 * s.audio.getNumSamples() / s.sampleRate) << " ms]";
-        std::cout << "\n";
-    }
-}
-
-int analyseFile (const juce::File& file, const juce::File& out)
-{
-    juce::AudioFormatManager formats;
-    formats.registerBasicFormats();
-    std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (file));
-    if (reader == nullptr)
-    {
-        std::cerr << "Cannot read " << file.getFullPathName() << "\n";
-        return 1;
-    }
-    juce::AudioBuffer<float> audio ((int) reader->numChannels, (int) reader->lengthInSamples);
-    reader->read (&audio, 0, audio.getNumSamples(), 0, true, true);
-
-    const auto started = juce::Time::getMillisecondCounterHiRes();
-    const auto result = DrumAnalyzer::analyse (audio, reader->sampleRate);
-    std::cout << "Analysed in " << juce::roundToInt (juce::Time::getMillisecondCounterHiRes() - started) << " ms, "
-              << result.hits.size() << " hits\n";
-    printKit (result);
-    if (out != juce::File())
-        writeKit (result, out);
-    return 0;
-}
-} // namespace
-
-// Writes the AI-separated drum stem of `in` to `out` (24-bit WAV).
-int separateFile (const juce::File& in, const juce::File& out)
-{
-    if (! DrumSeparator::isAvailable())
-    {
-        std::cerr << "AI separation unavailable: " << DrumSeparator::unavailableReason() << "\n";
-        return 1;
-    }
-
-    juce::AudioFormatManager formats;
-    formats.registerBasicFormats();
-    std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (in));
-    if (reader == nullptr)
-        return 1;
-    juce::AudioBuffer<float> audio ((int) reader->numChannels, (int) reader->lengthInSamples);
-    reader->read (&audio, 0, audio.getNumSamples(), 0, true, true);
-
-    const auto started = juce::Time::getMillisecondCounterHiRes();
-    juce::String error;
-    const auto drums = DrumSeparator::separate (audio, reader->sampleRate,
-                                                [] (float p) { std::cout << "\r" << juce::roundToInt (p * 100.0f) << "%" << std::flush; },
-                                                {}, error);
-    std::cout << "\nSeparated in " << juce::roundToInt (juce::Time::getMillisecondCounterHiRes() - started) << " ms\n";
-    if (drums.getNumSamples() == 0)
-    {
-        std::cerr << "Separation failed: " << error << "\n";
-        return 1;
-    }
-
-    out.deleteFile();
-    juce::WavAudioFormat wav;
-    std::unique_ptr<juce::OutputStream> stream (out.createOutputStream().release());
-    if (auto writer = std::unique_ptr<juce::AudioFormatWriter> (wav.createWriterFor (stream.get(), DrumSeparator::modelSampleRate, 2, 24, {}, 0)))
+    std::unique_ptr<juce::OutputStream> stream (file.createOutputStream().release());
+    if (auto writer = std::unique_ptr<juce::AudioFormatWriter> (
+            wav.createWriterFor (stream.get(), rate, (unsigned int) audio.getNumChannels(), 24, {}, 0)))
     {
         stream.release();
-        writer->writeFromAudioSampleBuffer (drums, 0, drums.getNumSamples());
+        writer->writeFromAudioSampleBuffer (audio, 0, audio.getNumSamples());
     }
-    return 0;
 }
 
 juce::AudioBuffer<float> readFile (const juce::File& file, double& sampleRate)
@@ -270,232 +210,186 @@ juce::AudioBuffer<float> readFile (const juce::File& file, double& sampleRate)
     return audio;
 }
 
-void writeStem (const juce::AudioBuffer<float>& audio, const juce::File& file)
+void writeKit (const AnalysisResult& result, const juce::File& folder)
 {
-    file.deleteFile();
-    juce::WavAudioFormat wav;
-    std::unique_ptr<juce::OutputStream> stream (file.createOutputStream().release());
-    if (auto writer = std::unique_ptr<juce::AudioFormatWriter> (wav.createWriterFor (stream.get(), DrumSeparator::modelSampleRate,
-                                                                                    (unsigned int) audio.getNumChannels(), 24, {}, 0)))
+    folder.createDirectory();
+    for (int c = 0; c < numDrumClasses; ++c)
+        for (size_t v = 0; v < result.kit[(size_t) c].size(); ++v)
+        {
+            auto& s = result.kit[(size_t) c][v];
+            writeWav (s.audio, s.sampleRate, folder.getChildFile (juce::String (drumClassName ((DrumClass) c)).replace ("-", "")
+                                                                  + "_" + juce::String ((int) v + 1) + ".wav"));
+        }
+}
+
+void printKit (const AnalysisResult& result)
+{
+    std::array<int, numDrumClasses> hits {};
+    for (auto& h : result.hits)
+        ++hits[(size_t) h.drumClass];
+    for (int c = 0; c < numDrumClasses; ++c)
     {
-        stream.release();
-        writer->writeFromAudioSampleBuffer (audio, 0, audio.getNumSamples());
+        std::cout << "  " << drumClassName ((DrumClass) c) << ": " << hits[(size_t) c] << " hits, "
+                  << result.kit[(size_t) c].size() << " sound(s)";
+        for (auto& s : result.kit[(size_t) c])
+            std::cout << " [" << s.hitsStacked << "x, " << juce::roundToInt (1000.0 * s.audio.getNumSamples() / s.sampleRate) << " ms]";
+        std::cout << "\n";
     }
 }
 
-const std::vector<DrumSeparator::DrumPart> analysedParts { DrumSeparator::DrumPart::kick, DrumSeparator::DrumPart::snare,
-                                                           DrumSeparator::DrumPart::hihat };
+AnalysisResult extractTimed (const std::vector<juce::AudioBuffer<float>>& parts, double rate)
+{
+    const auto started = juce::Time::getMillisecondCounterHiRes();
+    auto result = DrumAnalyzer::extract (parts, rate);
+    std::cout << "Extracted in " << juce::roundToInt (juce::Time::getMillisecondCounterHiRes() - started) << " ms, "
+              << result.hits.size() << " hits\n";
+    printKit (result);
+    return result;
+}
 
-std::vector<juce::AudioBuffer<float>> splitDrums (const juce::AudioBuffer<float>& drums,
-                                                 const std::vector<DrumSeparator::DrumPart>& wanted = analysedParts)
+void printProgress (float p) { std::cout << "\r" << juce::roundToInt (p * 100.0f) << "%" << std::flush; }
+
+juce::AudioBuffer<float> separate (const juce::AudioBuffer<float>& audio, double rate)
 {
     const auto started = juce::Time::getMillisecondCounterHiRes();
     juce::String error;
-    auto parts = DrumSeparator::split (drums, wanted,
-                                       [] (float p) { std::cout << "\r" << juce::roundToInt (p * 100.0f) << "%" << std::flush; },
-                                       {}, error);
+    auto drums = DrumSeparator::separate (audio, rate, printProgress, {}, error);
+    std::cout << "\nSeparated in " << juce::roundToInt (juce::Time::getMillisecondCounterHiRes() - started) << " ms\n";
+    if (drums.getNumSamples() == 0)
+        std::cerr << "Separation failed: " << error << "\n";
+    return drums;
+}
+
+std::vector<juce::AudioBuffer<float>> split (const juce::AudioBuffer<float>& drums)
+{
+    using Part = DrumSeparator::DrumPart;
+    const auto started = juce::Time::getMillisecondCounterHiRes();
+    juce::String error;
+    auto parts = DrumSeparator::split (drums, { Part::kick, Part::snare, Part::toms, Part::hihat, Part::cymbals },
+                                       printProgress, {}, error);
     std::cout << "\nSplit in " << juce::roundToInt (juce::Time::getMillisecondCounterHiRes() - started) << " ms\n";
     if (parts.empty())
         std::cerr << "Split failed: " << error << "\n";
     return parts;
 }
 
+bool checkAI()
+{
+    if (DrumSeparator::isAvailable())
+        return true;
+    std::cerr << "AI models unavailable: " << DrumSeparator::unavailableReason() << "\n";
+    return false;
+}
+
+//==============================================================================
+// --separate song drums.wav
+int separateFile (const juce::File& in, const juce::File& out)
+{
+    double rate = 0.0;
+    const auto audio = readFile (in, rate);
+    if (! checkAI() || audio.getNumSamples() == 0)
+        return 1;
+    const auto drums = separate (audio, rate);
+    if (drums.getNumSamples() == 0)
+        return 1;
+    writeWav (drums, DrumSeparator::modelSampleRate, out);
+    return 0;
+}
+
 // --split drums.wav folder
 int splitFile (const juce::File& in, const juce::File& folder)
 {
-    if (! DrumSeparator::canSplit())
-    {
-        std::cerr << "Drum split model not found\n";
+    double rate = 0.0;
+    const auto drums = readFile (in, rate);
+    if (! checkAI())
         return 1;
-    }
-    double sr = 0.0;
-    const auto drums = readFile (in, sr);
-    if (drums.getNumSamples() == 0 || std::abs (sr - DrumSeparator::modelSampleRate) > 0.5)
+    if (drums.getNumSamples() == 0 || std::abs (rate - DrumSeparator::modelSampleRate) > 0.5)
     {
         std::cerr << "Needs a 44.1 kHz drum stem\n";
         return 1;
     }
-    using Part = DrumSeparator::DrumPart;
-    const auto parts = splitDrums (drums, { Part::kick, Part::snare, Part::toms, Part::hihat, Part::cymbals });
+    const auto parts = split (drums);
     if (parts.empty())
         return 1;
     folder.createDirectory();
-    const char* names[] { "kick", "snare", "toms", "hihat", "cymbals" };
     for (int part = 0; part < DrumSeparator::numDrumParts; ++part)
-        writeStem (parts[(size_t) part], folder.getChildFile (juce::String (names[part]) + ".wav"));
+        writeWav (parts[(size_t) part], DrumSeparator::modelSampleRate, folder.getChildFile (juce::String (partFileNames[part]) + ".wav"));
     return 0;
 }
 
-// --file-ai song [out]: what the plugin does with the AI switch on.
-int analyseFileWithAI (const juce::File& in, const juce::File& out)
+// --file-ai song [out]: what the plugin does.
+int extractWithAI (const juce::File& in, const juce::File& out)
 {
-    if (! DrumSeparator::canSplit())
-    {
-        std::cerr << "AI models not found: " << DrumSeparator::unavailableReason() << "\n";
+    double rate = 0.0;
+    const auto audio = readFile (in, rate);
+    if (! checkAI() || audio.getNumSamples() == 0)
         return 1;
-    }
-    double sr = 0.0;
-    const auto audio = readFile (in, sr);
-    if (audio.getNumSamples() == 0)
-        return 1;
-
-    juce::String error;
-    const auto drums = DrumSeparator::separate (audio, sr, {}, {}, error);
+    const auto drums = separate (audio, rate);
     if (drums.getNumSamples() == 0)
-    {
-        std::cerr << "Separation failed: " << error << "\n";
         return 1;
-    }
-    const auto parts = splitDrums (drums);
+    const auto parts = split (drums);
     if (parts.empty())
         return 1;
-
-    const auto started = juce::Time::getMillisecondCounterHiRes();
-    const auto result = DrumAnalyzer::analyseParts (drums, parts[(size_t) DrumSeparator::DrumPart::kick],
-                                                    parts[(size_t) DrumSeparator::DrumPart::snare],
-                                                    parts[(size_t) DrumSeparator::DrumPart::hihat], DrumSeparator::modelSampleRate);
-    std::cout << "Analysed in " << juce::roundToInt (juce::Time::getMillisecondCounterHiRes() - started) << " ms, "
-              << result.hits.size() << " hits\n";
-    printKit (result);
+    const auto result = extractTimed (parts, DrumSeparator::modelSampleRate);
     if (out != juce::File())
         writeKit (result, out);
 
-    // Any beat has a kick, a snare or clap, and hats.
+    // Any beat has a kick, a snare and hats.
     auto found = [&] (DrumClass c) { return ! result.kit[(size_t) c].empty(); };
-    const bool ok = found (DrumClass::kick) && (found (DrumClass::snare) || found (DrumClass::clap)) && found (DrumClass::hat);
-    std::cout << (ok ? "PASS\n" : "FAIL: kick, snare/clap or hats missing\n");
+    const bool ok = found (DrumClass::kick) && found (DrumClass::snare) && found (DrumClass::hihat);
+    std::cout << (ok ? "PASS\n" : "FAIL: kick, snare or hi-hat missing\n");
     return ok ? 0 : 1;
 }
 
-// --file-parts drums.wav folder [out]: builds the kit from a drum stem and the stems --split wrote.
-int analyseParts (const juce::File& drumsFile, const juce::File& folder, const juce::File& out)
+std::vector<juce::AudioBuffer<float>> readParts (const juce::File& folder, double& rate)
 {
-    double sr = 0.0, partRate = 0.0;
-    const auto drums = readFile (drumsFile, sr);
-    const auto kick = readFile (folder.getChildFile ("kick.wav"), partRate);
-    const auto snare = readFile (folder.getChildFile ("snare.wav"), partRate);
-    const auto hihat = readFile (folder.getChildFile ("hihat.wav"), partRate);
-    if (drums.getNumSamples() == 0 || kick.getNumSamples() == 0 || snare.getNumSamples() == 0 || hihat.getNumSamples() == 0)
+    std::vector<juce::AudioBuffer<float>> parts;
+    for (auto* name : partFileNames)
     {
-        std::cerr << "Needs a drum stem and kick.wav, snare.wav and hihat.wav\n";
-        return 1;
+        parts.push_back (readFile (folder.getChildFile (juce::String (name) + ".wav"), rate));
+        if (parts.back().getNumSamples() == 0)
+        {
+            std::cerr << "Needs kick.wav, snare.wav, toms.wav, hihat.wav and cymbals.wav (from --split)\n";
+            return {};
+        }
     }
-    const auto started = juce::Time::getMillisecondCounterHiRes();
-    const auto result = DrumAnalyzer::analyseParts (drums, kick, snare, hihat, sr);
-    std::cout << "Analysed in " << juce::roundToInt (juce::Time::getMillisecondCounterHiRes() - started) << " ms, "
-              << result.hits.size() << " hits\n";
-    printKit (result);
+    return parts;
+}
+
+// --file-parts folder [out]
+int extractParts (const juce::File& folder, const juce::File& out)
+{
+    double rate = 0.0;
+    const auto parts = readParts (folder, rate);
+    if (parts.empty())
+        return 1;
+    const auto result = extractTimed (parts, rate);
     if (out != juce::File())
         writeKit (result, out);
     return 0;
 }
 
-// --hits file.wav: every detected hit as "<sample position> <drum>[+<layered drum>]".
-int listHits (const juce::File& file)
+// --hits folder: every hit as "<sample position> <drum>".
+int listHits (const juce::File& folder)
 {
-    double sr = 0.0;
-    const auto audio = readFile (file, sr);
-    if (audio.getNumSamples() == 0)
+    double rate = 0.0;
+    const auto parts = readParts (folder, rate);
+    if (parts.empty())
         return 1;
-    const auto result = DrumAnalyzer::analyse (audio, sr);
-    for (auto& hit : result.hits)
-    {
-        std::cout << hit.position << " " << drumClassName (hit.drumClass);
-        if (hit.secondaryClass >= 0)
-            std::cout << "+" << drumClassName ((DrumClass) hit.secondaryClass);
-        std::cout << "\n";
-    }
+    for (auto& hit : DrumAnalyzer::extract (parts, rate).hits)
+        std::cout << hit.position << " " << drumClassName (hit.drumClass) << "\n";
     return 0;
 }
 
-int main (int argc, char** argv)
+// --write-mix beat.wav: the synthetic drums with a bass line and chords, for the AI tests.
+int writeMix (const juce::File& file)
 {
-    if (argc >= 3 && juce::String (argv[1]) == "--hits")
-        return listHits (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]));
-
-    if (argc >= 4 && juce::String (argv[1]) == "--file-parts")
-        return analyseParts (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]),
-                             juce::File::getCurrentWorkingDirectory().getChildFile (argv[3]),
-                             argc >= 5 ? juce::File::getCurrentWorkingDirectory().getChildFile (argv[4]) : juce::File());
-
-    if (argc >= 4 && juce::String (argv[1]) == "--split")
-        return splitFile (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]),
-                          juce::File::getCurrentWorkingDirectory().getChildFile (argv[3]));
-
-    if (argc >= 3 && juce::String (argv[1]) == "--file-ai")
-        return analyseFileWithAI (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]),
-                                  argc >= 4 ? juce::File::getCurrentWorkingDirectory().getChildFile (argv[3]) : juce::File());
-
-    if (argc >= 4 && juce::String (argv[1]) == "--separate")
-        return separateFile (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]),
-                             juce::File::getCurrentWorkingDirectory().getChildFile (argv[3]));
-
-    if (argc >= 3 && juce::String (argv[1]) == "--file")
-        return analyseFile (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]),
-                            argc >= 4 ? juce::File::getCurrentWorkingDirectory().getChildFile (argv[3]) : juce::File());
-
-    // --layered: every snare has an open hat on top and kicks land together with closed hats;
-    // the open and closed hats also play alone elsewhere, as in most real beats.
-    // --layered-always: the same, but the open hat never plays alone (so no clean copy of it exists).
-    const bool alwaysLayered = argc >= 2 && juce::String (argv[1]) == "--layered-always";
-    const bool layered = alwaysLayered || (argc >= 2 && juce::String (argv[1]) == "--layered");
-    if (layered)
-    {
-        --argc;
-        ++argv;
-    }
-
-    const double bpm = 120.0;
-    const int step = (int) (sr * 60.0 / bpm / 4.0); // sixteenth note
-    const int bars = 8;
-    std::vector<float> mix ((size_t) (step * 16 * bars + sr), 0.0f);
-    std::vector<Truth> truth;
-
-    const auto kick = makeKick(), snare = makeSnare(), clap = makeClap();
-    const auto hat = makeHat (false), openHat = makeHat (true);
-
-    for (int bar = 0; bar < bars; ++bar)
-        for (int s = 0; s < 16; ++s)
-        {
-            const int at = (bar * 16 + s) * step;
-            const float humanise = 0.85f + 0.15f * (float) ((bar * 7 + s * 3) % 5) / 4.0f;
-            if (layered)
-            {
-                auto hit = [&] (const std::vector<float>& sound, float gain, DrumClass c)
-                {
-                    add (mix, sound, at, gain * humanise);
-                    truth.push_back ({ at, c });
-                };
-                if (s == 0 || s == 10) hit (kick, 0.9f, DrumClass::kick);
-                if (s == 0 || s == 2 || s == 8 || s == 10) hit (hat, 0.25f, DrumClass::hat);
-                if (s == 4 || s == 12) hit (snare, 0.7f, DrumClass::snare);
-                if (s == 4 || s == 12 || (s == 6 && ! alwaysLayered)) hit (openHat, 0.2f, DrumClass::openHat);
-                continue;
-            }
-            if (s == 0 || s == 10)
-            {
-                add (mix, kick, at, 0.9f * humanise);
-                truth.push_back ({ at, DrumClass::kick });
-            }
-            if (s == 4 || s == 12)
-            {
-                const bool useClap = bar % 2 == 1;
-                add (mix, useClap ? clap : snare, at, 0.7f * humanise);
-                truth.push_back ({ at, useClap ? DrumClass::clap : DrumClass::snare });
-            }
-            if (s % 2 == 0 && s != 0 && s != 4 && s != 10 && s != 12 && s != 14)
-            {
-                add (mix, hat, at, 0.25f * humanise);
-                truth.push_back ({ at, DrumClass::hat });
-            }
-            if (s == 14)
-            {
-                add (mix, openHat, at, 0.2f * humanise);
-                truth.push_back ({ at, DrumClass::openHat });
-            }
-        }
-
-    // Bass line and soft chords on top, so the drums are not alone.
+    const auto beat = makeBeat();
+    std::vector<float> mix (beat.parts[0].size(), 0.0f);
+    for (auto& part : beat.parts)
+        for (size_t i = 0; i < mix.size(); ++i)
+            mix[i] += part[i];
+    const int step = (int) (sr * 60.0 / 120.0 / 4.0);
     const float bassNotes[] { 55.0f, 65.41f, 49.0f, 73.42f };
     const float chordRoots[] { 220.0f, 261.63f, 196.0f, 293.66f };
     for (int i = 0; i < (int) mix.size(); ++i)
@@ -507,110 +401,117 @@ int main (int argc, char** argv)
         const float bassFreq = bassNotes[(bar + (posInBar >= 8 ? 1 : 0)) % 4];
         const float bassEnv = std::exp (-(float) ((i % (step * 8)) / sr) * 2.0f);
         mix[(size_t) i] += 0.25f * bassEnv * std::tanh (2.0f * std::sin (twoPi * bassFreq * t));
-
         const float root = chordRoots[bar];
         mix[(size_t) i] += 0.05f * (std::sin (twoPi * root * t) + std::sin (twoPi * root * 1.26f * t) + std::sin (twoPi * root * 1.5f * t));
     }
+    writeWav (toStereo (mix), sr, file);
+    return 0;
+}
 
-    juce::AudioBuffer<float> audio (2, (int) mix.size());
-    for (int ch = 0; ch < 2; ++ch)
-        audio.copyFrom (ch, 0, mix.data(), (int) mix.size());
+//==============================================================================
+// The synthetic test: five clean parts, so the right answer is known exactly.
+int syntheticTest (const juce::File& out)
+{
+    auto beat = makeBeat();
+    // A faint copy of the snare in the kick part (-48 dB), like the bleed the AI split leaves behind.
+    const auto snare = makeSnare();
+    for (int at : beat.hits[(size_t) DrumClass::snare])
+        add (beat.parts[(size_t) DrumClass::kick], snare, at, 0.004f);
+    std::vector<juce::AudioBuffer<float>> parts;
+    for (auto& p : beat.parts)
+        parts.push_back (toStereo (p));
+    const auto result = extractTimed (parts, sr);
+    bool ok = true;
+    auto fail = [&ok] (const juce::String& why) { std::cout << "  FAIL: " << why << "\n"; ok = false; };
 
-    if (argc >= 3 && juce::String (argv[1]) == "--write-mix")
+    // 1. Every hit of every part is found, at the right place, and nothing else (not the bleed).
+    for (int c = 0; c < numDrumClasses; ++c)
     {
-        const auto file = juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]);
-        file.deleteFile();
-        juce::WavAudioFormat wav;
-        std::unique_ptr<juce::OutputStream> stream (file.createOutputStream().release());
-        if (auto writer = std::unique_ptr<juce::AudioFormatWriter> (wav.createWriterFor (stream.get(), sr, 2, 24, {}, 0)))
-        {
-            stream.release();
-            writer->writeFromAudioSampleBuffer (audio, 0, audio.getNumSamples());
-        }
-        return 0;
-    }
-
-    const auto started = juce::Time::getMillisecondCounterHiRes();
-    const auto result = DrumAnalyzer::analyse (audio, sr);
-    std::cout << "Analysed " << bars << " bars in " << juce::roundToInt (juce::Time::getMillisecondCounterHiRes() - started)
-              << " ms: " << result.hits.size() << " hits detected, " << truth.size() << " expected\n";
-
-    // Detection and classification accuracy against the ground truth.
-    std::map<std::pair<int, int>, int> confusion;
-    int detected = 0;
-    for (auto& t : truth)
-    {
-        const DetectedHit* nearest = nullptr;
+        std::vector<int> found;
         for (auto& h : result.hits)
-            if (std::abs (h.position - t.position) < (int) (0.012 * sr))
-                nearest = &h;
-        if (nearest != nullptr)
+            if ((int) h.drumClass == c)
+                found.push_back (h.position);
+        const auto& truth = beat.hits[(size_t) c];
+        int matched = 0;
+        for (int t : truth)
+            for (int f : found)
+                if (std::abs (f - t) <= (int) (0.003 * sr))
+                {
+                    ++matched;
+                    break;
+                }
+        std::cout << drumClassName ((DrumClass) c) << ": " << matched << "/" << truth.size() << " hits found, "
+                  << found.size() << " reported\n";
+        if (matched != (int) truth.size() || found.size() != truth.size())
         {
-            ++detected;
-            const bool secondaryMatch = nearest->secondaryClass == (int) t.drumClass;
-            ++confusion[{ (int) t.drumClass, secondaryMatch ? (int) t.drumClass : (int) nearest->drumClass }];
+            fail ("wrong hits");
+            for (int f : found)
+                std::cout << " " << f;
+            std::cout << "\n";
         }
     }
 
-    std::cout << "Detected " << detected << "/" << truth.size() << " true hits\nConfusion (truth -> found):\n";
-    int correct = 0;
-    for (auto& [key, count] : confusion)
+    // 2. Each pad's sound is its own drum.
+    struct Expected { DrumClass pad; std::vector<float> sound; const char* name; };
+    const Expected expected[] { { DrumClass::kick, makeKick(), "kick" }, { DrumClass::kick, makeShortKick(), "short kick" },
+                                { DrumClass::snare, makeSnare(), "snare" }, { DrumClass::toms, makeTom (true), "high tom" },
+                                { DrumClass::toms, makeTom (false), "low tom" }, { DrumClass::hihat, makeHat(), "hat" },
+                                { DrumClass::cymbals, makeCrash(), "crash" } };
+    for (auto& e : expected)
     {
-        std::cout << "  " << drumClassName ((DrumClass) key.first) << " -> " << drumClassName ((DrumClass) key.second) << ": " << count << "\n";
-        if (key.first == key.second)
-            correct += count;
+        float best = 0.0f;
+        for (auto& s : result.kit[(size_t) e.pad])
+            best = std::max (best, bestCorrelation (e.sound, s.audio));
+        std::cout << "Similarity " << e.name << ": " << juce::String (best, 4) << "\n";
+        if (best < 0.99f)
+            fail (juce::String (e.name) + " not on its pad");
     }
-    printKit (result);
+    if (result.kit[(size_t) DrumClass::kick].size() != 2 || result.kit[(size_t) DrumClass::toms].size() != 2)
+        fail ("expected two kicks and two toms");
 
-    // Each extracted sound should closely match the drum that was put in.
-    bool ok = detected >= (int) truth.size() * 9 / 10 && correct >= detected * 8 / 10;
-    const std::pair<DrumClass, const std::vector<float>*> references[] {
-        { DrumClass::kick, &kick }, { DrumClass::snare, &snare }, { DrumClass::clap, &clap },
-        { DrumClass::hat, &hat }, { DrumClass::openHat, &openHat }
-    };
-    for (auto& [drumClass, reference] : references)
-    {
-        if (layered && drumClass == DrumClass::clap)
-            continue;
-        auto& variations = result.kit[(size_t) drumClass];
-        const float corr = variations.empty() ? 0.0f : bestCorrelation (*reference, variations.front().audio);
-        std::cout << "Similarity " << drumClassName (drumClass) << ": " << juce::String (corr, 3);
-
-        // Layering: how much of the drum it was layered with is still inside the extracted sound.
-        const std::vector<float>* other = nullptr;
-        if (layered)
-            switch (drumClass)
-            {
-                case DrumClass::kick:    other = &hat; break;
-                case DrumClass::hat:     other = &kick; break;
-                case DrumClass::snare:   other = &openHat; break;
-                case DrumClass::openHat: other = &snare; break;
-                case DrumClass::clap:
-                case DrumClass::perc:    break;
-            }
-        if (alwaysLayered && drumClass == DrumClass::openHat)
-            other = nullptr; // no open hat of its own to judge
-        if (other != nullptr && ! variations.empty())
+    // 3. Every sound is a hit of its part, unchanged: the same samples apart from the 2 ms fade-in and
+    // the 5 ms fade-out.
+    const int fadeIn = (int) (0.002 * sr), fadeOut = (int) (0.005 * sr);
+    for (int c = 0; c < numDrumClasses; ++c)
+        for (auto& s : result.kit[(size_t) c])
         {
-            // With no clean copy of the layered drum anywhere, only its ringing on can be removed (its
-            // attack lands on, and is masked by, the main drum's attack), so judge the tail.
-            const int skip = alwaysLayered ? (int) (0.05 * sr) : 0;
-            const float leak = bestCorrelation (*other, variations.front().audio, skip);
-            const float leakDb = juce::Decibels::gainToDecibels (leak, -60.0f);
-            std::cout << "  (layered drum still in " << (skip > 0 ? "its tail: " : "it: ") << juce::String (leakDb, 1) << " dB)";
-            // With a clean copy elsewhere the other drum must be 20 dB down. Without one, only its
-            // ringing on can be told apart from the main drum, so the bar is lower.
-            if (leakDb > (alwaysLayered ? -13.0f : -20.0f))
-                ok = false;
+            const int n = s.audio.getNumSamples();
+            float bestDiff = 1.0f;
+            for (int at : beat.hits[(size_t) c])
+                for (int start = std::max (0, at - fadeIn - 132); start <= std::max (0, at - fadeIn + 132); ++start)
+                {
+                    if (start < 0 || start + n > parts[(size_t) c].getNumSamples())
+                        continue;
+                    float diff = 0.0f;
+                    for (int ch = 0; ch < 2 && diff < bestDiff; ++ch)
+                        for (int i = fadeIn; i < n - fadeOut && diff < bestDiff; ++i)
+                            diff = std::max (diff, std::abs (s.audio.getSample (ch, i) - parts[(size_t) c].getSample (ch, start + i)));
+                    bestDiff = std::min (bestDiff, diff);
+                }
+            if (bestDiff > 1e-6f)
+                fail (juce::String (drumClassName ((DrumClass) c)) + " sound was changed (" + juce::String (bestDiff) + ")");
         }
-        std::cout << "\n";
-        if (corr < 0.8f && ! (alwaysLayered && drumClass == DrumClass::openHat))
-            ok = false;
-    }
 
-    if (argc == 2)
-        writeKit (result, juce::File::getCurrentWorkingDirectory().getChildFile (argv[1]));
-
+    if (out != juce::File())
+        writeKit (result, out);
     std::cout << (ok ? "PASS" : "FAIL") << "\n";
     return ok ? 0 : 1;
+}
+} // namespace
+
+int main (int argc, char** argv)
+{
+    const juce::String mode = argc >= 2 ? argv[1] : "";
+    if (mode == "--write-mix" && argc >= 3)  return writeMix (arg (argv[2]));
+    if (mode == "--separate" && argc >= 4)   return separateFile (arg (argv[2]), arg (argv[3]));
+    if (mode == "--split" && argc >= 4)      return splitFile (arg (argv[2]), arg (argv[3]));
+    if (mode == "--file-ai" && argc >= 3)    return extractWithAI (arg (argv[2]), argc >= 4 ? arg (argv[3]) : juce::File());
+    if (mode == "--file-parts" && argc >= 3) return extractParts (arg (argv[2]), argc >= 4 ? arg (argv[3]) : juce::File());
+    if (mode == "--hits" && argc >= 3)       return listHits (arg (argv[2]));
+    if (mode.startsWith ("--"))
+    {
+        std::cerr << "Unknown or incomplete option " << mode << "\n";
+        return 1;
+    }
+    return syntheticTest (argc >= 2 ? arg (argv[1]) : juce::File());
 }

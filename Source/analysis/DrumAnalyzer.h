@@ -2,72 +2,61 @@
 
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <array>
-#include <atomic>
 #include <functional>
 #include <vector>
 
 namespace kitnap
 {
-enum class DrumClass { kick, snare, clap, hat, openHat, perc };
-constexpr int numDrumClasses = 6;
+// The five pads: one per part of the AI drum split, in the same order as DrumSeparator::DrumPart.
+enum class DrumClass { kick, snare, toms, hihat, cymbals };
+constexpr int numDrumClasses = 5;
 
 inline const char* drumClassName (DrumClass c)
 {
-    static constexpr const char* names[] { "KICK", "SNARE", "CLAP", "HAT", "OPEN HAT", "PERC" };
+    static constexpr const char* names[] { "KICK", "SNARE", "TOMS", "HI-HAT", "CYMBALS" };
     return names[(int) c];
 }
 
-// One extracted, cleaned drum sound.
+// One drum sound: a single hit cut straight out of its part, as it sounds in the song.
 struct DrumSample
 {
     juce::AudioBuffer<float> audio;
     double sampleRate = 44100.0;
-    int hitsStacked = 1; // how many hits of the song were averaged into this sound
-    std::vector<int> sourceHits; // indices into AnalysisResult::hits of every hit in this group
-    bool fromLayer = false; // reconstructed from a drum ringing on top of another (no clean hits of it)
+    int hitsStacked = 1; // how many hits of the song sound like this one
+    std::vector<int> sourceHits; // indices into AnalysisResult::hits of every hit that sounds like this one
 };
 
-// A detected hit in the source audio (used for the waveform markers).
+// A detected hit in the song (used for the waveform markers).
 struct DetectedHit
 {
     int position = 0; // sample index in the source
-    DrumClass drumClass = DrumClass::perc;
-    int secondaryClass = -1; // another drum class heard in the same hit, or -1
+    DrumClass drumClass = DrumClass::kick;
     float strength = 0.0f;
 };
 
 struct AnalysisResult
 {
     std::vector<DetectedHit> hits;
-    // For each drum class: the variations found, best first.
+    // For each pad: the different sounds found in its part, the most frequent first.
     std::array<std::vector<DrumSample>, numDrumClasses> kit;
 };
 
-// Offline analysis that turns a drum loop or sparse beat into a cleaned-up drum kit:
-//   1. spectral-flux onset detection
-//   2. per-hit features (band energies, noisiness, decay, clap flams) -> drum class
-//   3. hits of a class are grouped by waveform similarity
-//   4. each group is aligned and averaged ("stacked"), cancelling the rest of the mix
-//   5. class-specific cleanup filters, trimming, fades and normalisation
+// Builds the kit from the five parts of the AI drum split (kick, snare, toms, hi-hat, cymbals):
+// every pad comes from its own part and nothing else.
+//   1. find the hits in the part (spectral flux), ignoring leftovers far below its real hits
+//   2. group hits that sound alike; each group is one variation on the pad
+//   3. per group, pick the cleanest single hit: loud, with room to ring out before the next hit,
+//      and little sound from the previous hit underneath it
+//   4. cut it out as it is, with only a 2 ms fade-in and a 5 ms fade-out so it doesn't click
+// No averaging, no filters, no generated tails and no level change.
 class DrumAnalyzer
 {
 public:
-    // progress receives values 0..1; shouldCancel is polled regularly.
-    static AnalysisResult analyse (const juce::AudioBuffer<float>& source, double sampleRate,
+    // parts: numDrumClasses stereo buffers, indexed by DrumClass. progress receives values 0..1;
+    // shouldCancel is polled regularly.
+    static AnalysisResult extract (const std::vector<juce::AudioBuffer<float>>& parts, double sampleRate,
                                    const std::function<void (float)>& progress = {},
                                    const std::function<bool()>& shouldCancel = {});
-
-    // Builds the kit from a drum stem that the AI has also split into kick, snare and hi-hat stems.
-    // The whole drum stem decides what the drums are (classes, variations, hits); every sound is
-    // then swapped for the same drum taken from a split stem when one clearly matches it, which is
-    // the same sound without what was layered on it. The split only fills in what the drum stem
-    // lacks (e.g. an open hat that only ever rang on top of a clap), since on electronic or heavily
-    // processed drums it can put a drum in the wrong stem.
-    static AnalysisResult analyseParts (const juce::AudioBuffer<float>& drums, const juce::AudioBuffer<float>& kick,
-                                        const juce::AudioBuffer<float>& snare, const juce::AudioBuffer<float>& hihat,
-                                        double sampleRate,
-                                        const std::function<void (float)>& progress = {},
-                                        const std::function<bool()>& shouldCancel = {});
 
     static constexpr int maxVariationsPerClass = 8;
 };

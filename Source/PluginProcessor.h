@@ -12,7 +12,6 @@ struct KitState
     enum class Stage { reading, separating, splitting, analysing };
 
     Status status = Status::empty;
-    bool separated = false; // the kit was extracted from an AI-separated drum stem
     juce::String sourceName, message;
     juce::File sourceFile;
     double sourceLengthSeconds = 0.0;
@@ -65,12 +64,9 @@ public:
     float getProgress() const { return progress.load(); }
     KitState::Stage getStage() const { return (KitState::Stage) stage.load(); }
 
-    // Phase 2: AI drum separation before the analysis.
+    // The two AI models (drum separation and the 5-part drum split) are needed to make a kit.
     bool isAIAvailable() const;
     juce::String aiUnavailableReason() const;
-    bool canSplitKit() const; // the AI can also split the drums into kick, snare and hi-hat
-    bool isAIEnabled() const { return aiEnabled; }
-    void setAIEnabled (bool shouldBeEnabled);
 
     void selectVariation (int pad, int index);
     void triggerPad (int pad) { sampler.triggerFromUi (pad); }
@@ -101,7 +97,6 @@ private:
     std::unique_ptr<AnalysisJob> job;
     std::atomic<float> progress { 0.0f };
     std::atomic<int> stage { 0 };
-    bool aiEnabled = true;
 
     // Samples that a voice might still be playing; released once nobody else holds them.
     std::vector<kitnap::SamplePtr> retired;

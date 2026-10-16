@@ -4,9 +4,23 @@ namespace kitnap
 {
 int KitSampler::noteForPad (int pad)
 {
-    // GM drum map: kick, snare, clap, closed hat, open hat, low tom.
-    static constexpr int notes[] { 36, 38, 39, 42, 46, 45 };
+    // GM drum map: kick, snare, low tom, closed hat, crash.
+    static constexpr int notes[] { 36, 38, 45, 42, 49 };
     return notes[pad];
+}
+
+int KitSampler::padForNote (int note)
+{
+    // The other GM notes of each kind of drum play the same pad, so any drum pattern sounds complete.
+    switch (note)
+    {
+        case 35: case 36:                                         return (int) DrumClass::kick;
+        case 37: case 38: case 39: case 40:                       return (int) DrumClass::snare;
+        case 41: case 43: case 45: case 47: case 48: case 50:     return (int) DrumClass::toms;
+        case 42: case 44: case 46:                                return (int) DrumClass::hihat;
+        case 49: case 51: case 52: case 53: case 55: case 57: case 59: return (int) DrumClass::cymbals;
+        default:                                                  return -1;
+    }
 }
 
 void KitSampler::prepare (double newSampleRate)
@@ -47,12 +61,6 @@ void KitSampler::startVoice (int pad, float velocity)
     if (sample == nullptr || sample->audio.getNumSamples() == 0)
         return;
 
-    // Closed hat chokes the open hat, like on a real kit.
-    if (pad == (int) DrumClass::hat)
-        for (auto& v : voices)
-            if (v.pad == (int) DrumClass::openHat && v.sample != nullptr && v.fadeOutRemaining < 0)
-                v.fadeOutRemaining = (int) (0.006 * sampleRate);
-
     // Take a free voice, or steal the one that has played the longest.
     Voice* target = nullptr;
     for (auto& v : voices)
@@ -70,7 +78,6 @@ void KitSampler::startVoice (int pad, float velocity)
     target->position = 0.0;
     target->increment = target->sample->sampleRate / sampleRate;
     target->gain = velocity;
-    target->fadeOutRemaining = -1;
 
     activity[(size_t) pad].store (std::max (activity[(size_t) pad].load(), 0.4f + 0.6f * velocity));
 }
@@ -95,9 +102,8 @@ void KitSampler::render (juce::AudioBuffer<float>& output, const juce::MidiBuffe
         renderVoices (output, position, eventTime - position);
         position = eventTime;
 
-        for (int pad = 0; pad < numPads; ++pad)
-            if (noteForPad (pad) == message.getNoteNumber())
-                startVoice (pad, message.getFloatVelocity());
+        if (const int pad = padForNote (message.getNoteNumber()); pad >= 0)
+            startVoice (pad, message.getFloatVelocity());
     }
     renderVoices (output, position, output.getNumSamples() - position);
 }
@@ -108,7 +114,6 @@ void KitSampler::renderVoices (juce::AudioBuffer<float>& output, int start, int 
         return;
 
     const int outChannels = output.getNumChannels();
-    const int fadeLength = std::max (1, (int) (0.006 * sampleRate));
 
     for (auto& v : voices)
     {
@@ -122,23 +127,19 @@ void KitSampler::renderVoices (juce::AudioBuffer<float>& output, int start, int 
         for (int i = 0; i < numSamples; ++i)
         {
             const int index = (int) v.position;
-            if (index + 1 >= length || v.fadeOutRemaining == 0)
+            if (index + 1 >= length)
             {
                 v.sample = nullptr;
                 v.pad = -1;
                 break;
             }
 
-            float gain = v.gain;
-            if (v.fadeOutRemaining > 0)
-                gain *= (float) v.fadeOutRemaining-- / (float) fadeLength;
-
             const float frac = (float) (v.position - index);
             for (int ch = 0; ch < outChannels; ++ch)
             {
                 const float* src = audio.getReadPointer (std::min (ch, srcChannels - 1));
                 const float sample = src[index] + frac * (src[index + 1] - src[index]);
-                output.addSample (ch, start + i, gain * sample);
+                output.addSample (ch, start + i, v.gain * sample);
             }
             v.position += v.increment;
         }

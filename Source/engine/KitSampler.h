@@ -16,7 +16,8 @@ class KitSampler
 {
 public:
     static constexpr int numPads = numDrumClasses;
-    static int noteForPad (int pad);
+    static int noteForPad (int pad);  // the main note of each pad
+    static int padForNote (int note); // -1 when no pad plays this note
 
     void prepare (double sampleRate);
 
@@ -41,7 +42,6 @@ private:
         int pad = -1;
         double position = 0.0, increment = 1.0;
         float gain = 1.0f;
-        int fadeOutRemaining = -1; // >= 0 while choking
     };
 
     void startVoice (int pad, float velocity);

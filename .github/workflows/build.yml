@@ -64,23 +64,15 @@ jobs:
       - name: Build
         run: cmake --build build --config Release --parallel 4
 
-      - name: Analyzer test
+      - name: Kit extraction test
         shell: bash
-        run: |
-          ${{ matrix.test }}
-          ${{ matrix.test }} --layered
-          ${{ matrix.test }} --layered-always
+        run: ${{ matrix.test }}
 
-      - name: AI separation test
+      - name: AI test (separate, split, extract)
         shell: bash
         run: |
           ${{ matrix.test }} --write-mix beat.wav
-          ${{ matrix.test }} --separate beat.wav beat-drums.wav
-          ${{ matrix.test }} --file beat-drums.wav
-
-      - name: AI drum split test
-        shell: bash
-        run: ${{ matrix.test }} --file-ai beat.wav
+          ${{ matrix.test }} --file-ai beat.wav
 
       - name: Windows installer
         if: runner.os == 'Windows'

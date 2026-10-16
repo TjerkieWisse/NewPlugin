@@ -486,19 +486,12 @@ juce::String DrumSeparator::unavailableReason()
    #if KITNAP_HAS_ONNX
     if (! findModel (drumsModel).existsAsFile())
         return "Separation model not found";
+    if (! findModel (splitModel).existsAsFile())
+        return "Drum split model not found";
     auto& runtime = Runtime::get();
     return runtime.api == nullptr ? runtime.error : juce::String();
    #else
     return "Built without AI separation";
-   #endif
-}
-
-bool DrumSeparator::canSplit()
-{
-   #if KITNAP_HAS_ONNX
-    return isAvailable() && findModel (splitModel).existsAsFile();
-   #else
-    return false;
    #endif
 }
 
@@ -550,12 +543,8 @@ std::vector<juce::AudioBuffer<float>> DrumSeparator::split (const juce::AudioBuf
                                                             juce::String& error)
 {
    #if KITNAP_HAS_ONNX
-    if (! canSplit())
-    {
-        error = "Drum split model not found";
-        return {};
-    }
-    if (drums.getNumSamples() == 0 || drums.getNumChannels() == 0)
+    error = unavailableReason();
+    if (error.isNotEmpty() || drums.getNumSamples() == 0 || drums.getNumChannels() == 0)
         return {};
 
     auto& runtime = Runtime::get();

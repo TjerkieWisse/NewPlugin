@@ -8,6 +8,7 @@ namespace
 {
 constexpr double maxSourceSeconds = 12.0 * 60.0;
 constexpr int overviewBuckets = 2000;
+constexpr int kitFormat = 2; // 2: the five pads of the AI drum split
 
 juce::MemoryBlock encodeWav (const DrumSample& sample)
 {
@@ -58,7 +59,7 @@ SamplePtr decodeFlac (const juce::MemoryBlock& block, int hitsStacked)
 struct PackedHit
 {
     juce::int32 position;
-    juce::int8 drumClass, secondaryClass;
+    juce::int8 drumClass, reserved;
     juce::int16 strength; // 0..32767
 };
 
@@ -82,23 +83,20 @@ struct KitnapAudioProcessor::AnalysisOutput
     std::vector<float> overview;
     AnalysisResult result;
     std::array<int, numDrumClasses> selection {};
-    bool useAI = false, separated = false, split = false;
     double analysisSampleRate = 44100.0;
-    juce::String separationError;
 };
 
-// Reads the dropped file and runs the analyzer on a background thread.
+// Reads the dropped file and runs both AI models and the kit extraction on a background thread.
 class KitnapAudioProcessor::AnalysisJob : public juce::Thread
 {
 public:
     AnalysisJob (juce::AudioFormatManager& fm, juce::File f, std::atomic<float>& p, std::atomic<int>& st,
-                 std::array<int, numDrumClasses> selection, bool useAI)
+                 std::array<int, numDrumClasses> selection)
         : Thread ("KITNAP analysis"), formats (fm), progress (p), stage (st)
     {
         output = std::make_unique<AnalysisOutput>();
         output->file = std::move (f);
         output->selection = selection;
-        output->useAI = useAI;
     }
 
     void run() override
@@ -138,62 +136,44 @@ public:
         }
         overviewReady.store (true); // the editor can draw the waveform while the analysis runs
 
-        // Phase 2: pull the drums out of the mix with the AI model first, then analyse only the drums.
-        // Phase 3: a second model splits the drums into kick, snare and hi-hat, and each pad is built
-        // from its own part. The two AI steps take most of the time, so they get most of the progress bar.
-        juce::AudioBuffer<float> drums;
-        std::vector<juce::AudioBuffer<float>> parts;
-        const bool split = output->useAI && DrumSeparator::canSplit();
-        const float separateEnd = split ? 0.2f : 0.8f, splitEnd = 0.9f;
+        // 1. The first model pulls the drums out of the mix. 2. The second splits them into kick, snare,
+        // toms, hi-hat and cymbals. 3. Each pad gets single hits cut straight out of its own part.
+        // The two AI steps take nearly all of the time, so they get nearly all of the progress bar.
+        constexpr float separateEnd = 0.6f, splitEnd = 0.98f;
+        auto cancel = [this] { return threadShouldExit(); };
 
-        if (output->useAI)
+        stage.store ((int) KitState::Stage::separating);
+        juce::String error;
+        const auto drums = DrumSeparator::separate (audio, reader->sampleRate,
+                                                    [this] (float p) { progress.store (separateEnd * p); },
+                                                    cancel, error);
+        if (threadShouldExit())
+            return;
+        if (drums.getNumSamples() == 0)
         {
-            stage.store ((int) KitState::Stage::separating);
-            drums = DrumSeparator::separate (audio, reader->sampleRate,
-                                             [this, separateEnd] (float p) { progress.store (separateEnd * p); },
-                                             [this] { return threadShouldExit(); },
-                                             output->separationError);
-            if (threadShouldExit())
-                return;
-            output->separated = drums.getNumSamples() > 0;
+            output->error = "AI drum separation failed: " + error;
+            return;
         }
 
-        if (output->separated && split)
+        stage.store ((int) KitState::Stage::splitting);
+        const auto parts = DrumSeparator::split (drums, { DrumSeparator::DrumPart::kick, DrumSeparator::DrumPart::snare,
+                                                          DrumSeparator::DrumPart::toms, DrumSeparator::DrumPart::hihat,
+                                                          DrumSeparator::DrumPart::cymbals },
+                                                 [this] (float p) { progress.store (separateEnd + (splitEnd - separateEnd) * p); },
+                                                 cancel, error);
+        if (threadShouldExit())
+            return;
+        if ((int) parts.size() != numDrumClasses)
         {
-            stage.store ((int) KitState::Stage::splitting);
-            parts = DrumSeparator::split (drums, { DrumSeparator::DrumPart::kick, DrumSeparator::DrumPart::snare,
-                                                   DrumSeparator::DrumPart::hihat },
-                                          [this, separateEnd, splitEnd] (float p) { progress.store (separateEnd + (splitEnd - separateEnd) * p); },
-                                          [this] { return threadShouldExit(); },
-                                          output->separationError);
-            if (threadShouldExit())
-                return;
+            output->error = "AI drum split failed: " + error;
+            return;
         }
 
         stage.store ((int) KitState::Stage::analysing);
-        const float analysisStart = ! parts.empty() ? splitEnd : output->separated ? separateEnd : 0.0f;
-        auto analysisProgress = [this, analysisStart] (float p) { progress.store (analysisStart + (1.0f - analysisStart) * p); };
-        auto cancel = [this] { return threadShouldExit(); };
-
-        if (! parts.empty())
-        {
-            output->split = true;
-            output->analysisSampleRate = DrumSeparator::modelSampleRate;
-            output->result = DrumAnalyzer::analyseParts (drums, parts[(size_t) DrumSeparator::DrumPart::kick],
-                                                         parts[(size_t) DrumSeparator::DrumPart::snare],
-                                                         parts[(size_t) DrumSeparator::DrumPart::hihat],
-                                                         DrumSeparator::modelSampleRate, analysisProgress, cancel);
-        }
-        else if (output->separated)
-        {
-            output->analysisSampleRate = DrumSeparator::modelSampleRate;
-            output->result = DrumAnalyzer::analyse (drums, DrumSeparator::modelSampleRate, analysisProgress, cancel);
-        }
-        else
-        {
-            output->analysisSampleRate = reader->sampleRate;
-            output->result = DrumAnalyzer::analyse (audio, reader->sampleRate, analysisProgress, cancel);
-        }
+        output->analysisSampleRate = DrumSeparator::modelSampleRate;
+        output->result = DrumAnalyzer::extract (parts, DrumSeparator::modelSampleRate,
+                                                [this] (float p) { progress.store (splitEnd + (1.0f - splitEnd) * p); },
+                                                cancel);
         output->ok = ! threadShouldExit();
     }
 
@@ -282,8 +262,16 @@ void KitnapAudioProcessor::startAnalysis (const juce::File& file, std::array<int
     kit.hits.clear();
     kit.overview.clear();
 
-    job = std::make_unique<AnalysisJob> (formatManager, file, progress, stage, selection,
-                                         aiEnabled && DrumSeparator::isAvailable());
+    if (! DrumSeparator::isAvailable())
+    {
+        kit.status = KitState::Status::error;
+        kit.message = "The AI models aren't installed (" + DrumSeparator::unavailableReason()
+                    + "). Run the KITNAP installer, then load the track again.";
+        sendChangeMessage();
+        return;
+    }
+
+    job = std::make_unique<AnalysisJob> (formatManager, file, progress, stage, selection);
     job->startThread();
     sendChangeMessage();
 }
@@ -328,7 +316,6 @@ void KitnapAudioProcessor::applyAnalysis (std::unique_ptr<AnalysisOutput> output
 
     kit.hits = std::move (output->result.hits);
     kit.hitSampleRate = output->analysisSampleRate;
-    kit.separated = output->separated;
     kit.overview = std::move (output->overview);
     kit.sourceLengthSeconds = output->lengthSeconds;
 
@@ -349,11 +336,8 @@ void KitnapAudioProcessor::applyAnalysis (std::unique_ptr<AnalysisOutput> output
 
     applySelectionToSampler();
     kit.status = KitState::Status::ready;
-    kit.message = found == 0 ? juce::String ("No drums found. Try a drum loop or a track with clear drums.")
-                             : juce::String (kit.hits.size()) + " hits found"
-                                   + (output->split ? " (AI split)" : kit.separated ? " (AI separated)" : "");
-    if (output->useAI && ! output->split && output->separationError.isNotEmpty())
-        kit.message << "  (AI " << (output->separated ? "split" : "separation") << " failed: " << output->separationError << ")";
+    kit.message = found == 0 ? juce::String ("No drums found. Try a track with clear drums.")
+                             : juce::String (kit.hits.size()) + " hits found";
     sendChangeMessage();
 }
 
@@ -375,24 +359,6 @@ bool KitnapAudioProcessor::isAIAvailable() const
 juce::String KitnapAudioProcessor::aiUnavailableReason() const
 {
     return DrumSeparator::unavailableReason();
-}
-
-bool KitnapAudioProcessor::canSplitKit() const
-{
-    return DrumSeparator::canSplit();
-}
-
-void KitnapAudioProcessor::setAIEnabled (bool shouldBeEnabled)
-{
-    if (aiEnabled == shouldBeEnabled)
-        return;
-    aiEnabled = shouldBeEnabled;
-
-    // Re-run the current track so the two versions can be compared straight away.
-    if (kit.sourceFile.existsAsFile() && kit.status != KitState::Status::empty)
-        startAnalysis (kit.sourceFile, kit.selected);
-    else
-        sendChangeMessage();
 }
 
 void KitnapAudioProcessor::selectVariation (int pad, int index)
@@ -444,15 +410,14 @@ void KitnapAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     juce::ValueTree root ("KITNAP");
     root.appendChild (apvts.copyState(), nullptr);
-    root.setProperty ("ai", aiEnabled, nullptr);
 
     // The whole analysis is stored in the project: every variation, the hit map and the waveform.
     // Reopening a session is instant and never needs the source file or the AI again.
     juce::ValueTree kitTree ("Kit");
+    kitTree.setProperty ("version", kitFormat, nullptr);
     kitTree.setProperty ("source", kit.sourceFile.getFullPathName(), nullptr);
     kitTree.setProperty ("name", kit.sourceName, nullptr);
     kitTree.setProperty ("message", kit.message, nullptr);
-    kitTree.setProperty ("separated", kit.separated, nullptr);
     kitTree.setProperty ("hitRate", kit.hitSampleRate, nullptr);
     kitTree.setProperty ("length", kit.sourceLengthSeconds, nullptr);
 
@@ -463,7 +428,7 @@ void KitnapAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
     {
         std::vector<PackedHit> packed;
         for (auto& h : kit.hits)
-            packed.push_back ({ (juce::int32) h.position, (juce::int8) h.drumClass, (juce::int8) h.secondaryClass,
+            packed.push_back ({ (juce::int32) h.position, (juce::int8) h.drumClass, 0,
                                 (juce::int16) juce::jlimit (0, 32767, juce::roundToInt (h.strength * 32767.0f)) });
         kitTree.setProperty ("hits", juce::MemoryBlock (packed.data(), packed.size() * sizeof (PackedHit)).toBase64Encoding(), nullptr);
     }
@@ -498,11 +463,13 @@ void KitnapAudioProcessor::setStateInformation (const void* data, int sizeInByte
     if (auto params = root.getChildWithName (apvts.state.getType()); params.isValid())
         apvts.replaceState (params);
 
-    const auto kitTree = root.getChildWithName ("Kit");
+    // Kits from before the five pads (kick, snare, toms, hi-hat, cymbals) don't fit and aren't restored.
+    auto kitTree = root.getChildWithName ("Kit");
+    if ((int) kitTree.getProperty ("version", 1) != kitFormat)
+        kitTree = {};
 
-    auto restore = [this, kitTree, ai = (bool) root.getProperty ("ai", true)]
+    auto restore = [this, kitTree]
     {
-        aiEnabled = ai;
         if (! kitTree.isValid())
         {
             sendChangeMessage();
@@ -541,7 +508,6 @@ void KitnapAudioProcessor::setStateInformation (const void* data, int sizeInByte
         kit.sourceName = kitTree.getProperty ("name").toString();
         kit.sourceFile = juce::File (kitTree.getProperty ("source").toString());
         kit.message = kitTree.getProperty ("message").toString();
-        kit.separated = kitTree.getProperty ("separated", false);
         kit.hitSampleRate = kitTree.getProperty ("hitRate", 44100.0);
         kit.sourceLengthSeconds = kitTree.getProperty ("length", 0.0);
 
@@ -560,7 +526,7 @@ void KitnapAudioProcessor::setStateInformation (const void* data, int sizeInByte
             block.copyTo (packed.data(), 0, block.getSize());
             for (auto& p : packed)
                 if (juce::isPositiveAndBelow ((int) p.drumClass, numDrumClasses))
-                    kit.hits.push_back ({ p.position, (DrumClass) p.drumClass, p.secondaryClass, (float) p.strength / 32767.0f });
+                    kit.hits.push_back ({ p.position, (DrumClass) p.drumClass, (float) p.strength / 32767.0f });
         }
 
         kit.status = anySound ? KitState::Status::ready : KitState::Status::empty;

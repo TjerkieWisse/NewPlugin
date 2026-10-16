@@ -19,10 +19,9 @@ inline juce::Colour forClass (DrumClass c)
     {
         case DrumClass::kick:    return juce::Colour (0xffff3d6e);
         case DrumClass::snare:   return juce::Colour (0xffff9f1c);
-        case DrumClass::clap:    return juce::Colour (0xfff7e04b);
-        case DrumClass::hat:     return juce::Colour (0xff2ee6c5);
-        case DrumClass::openHat: return juce::Colour (0xff3da9ff);
-        case DrumClass::perc:    return juce::Colour (0xffa970ff);
+        case DrumClass::toms:    return juce::Colour (0xffa970ff);
+        case DrumClass::hihat:   return juce::Colour (0xff2ee6c5);
+        case DrumClass::cymbals: return juce::Colour (0xff3da9ff);
     }
     return accent;
 }

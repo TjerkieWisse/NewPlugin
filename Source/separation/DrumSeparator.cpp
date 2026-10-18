@@ -281,26 +281,32 @@ struct Session
 
     bool onGpu = false;
 
-    // On a Mac the models run on the GPU through Core ML, many times faster than on the CPU, in
-    // 32-bit floats like on the CPU (the Neural Engine would only do 16 bits). If Core ML can't be
-    // used, everything runs on the CPU. KITNAP_CPU_ONLY=1 in the environment forces the CPU.
+    // On a Mac the models can run on the GPU through Core ML, in 32-bit floats like on the CPU (the
+    // Neural Engine would only do 16 bits). Whether that's faster depends on the Mac and the model,
+    // so the first time both are timed and the faster one is remembered (see gpuIsFaster). If Core
+    // ML can't be used, everything runs on the CPU. In the environment, KITNAP_CPU_ONLY=1 forces the
+    // CPU and KITNAP_FORCE_GPU=1 the GPU.
     bool open (OrtEnv* env, const juce::File& model, [[maybe_unused]] bool allowGpu, juce::String& error)
     {
        #if JUCE_MAC
-        if (allowGpu && juce::SystemStats::getEnvironmentVariable ("KITNAP_CPU_ONLY", {}).isEmpty())
+        juce::String choice;
+        if (allowGpu && juce::SystemStats::getEnvironmentVariable ("KITNAP_CPU_ONLY", {}).isEmpty()
+            && gpuIsFaster (env, model, choice))
         {
             if (openWith (env, model, true, error))
             {
                 onGpu = true;
-                setBackend ("Core ML (GPU)");
+                setBackend ("Core ML (GPU)" + choice);
                 return true;
             }
             DBG ("KITNAP: Core ML unavailable (" << error << "), using the CPU");
             release();
             error = {};
         }
-       #endif
+        setBackend ("CPU" + choice);
+       #else
         setBackend ("CPU");
+       #endif
         return openWith (env, model, false, error);
     }
 
@@ -374,6 +380,47 @@ struct Session
     }
 
    #if JUCE_MAC
+    // Times one run of the model on the GPU and one on the CPU (on silence: the time doesn't depend
+    // on what's in it), once per model version, and remembers the answer in the Core ML cache
+    // folder. `details` gets the timings for the tests.
+    bool gpuIsFaster (OrtEnv* env, const juce::File& model, juce::String& details)
+    {
+        if (juce::SystemStats::getEnvironmentVariable ("KITNAP_FORCE_GPU", {}).isNotEmpty())
+            return true;
+
+        const auto record = coreMLCacheFolder (model).getChildFile ("faster.txt");
+        auto words = juce::StringArray::fromTokens (record.loadFileAsString(), true);
+        if (words.size() != 3)
+        {
+            // Seconds per run, or -1 if it failed. Core ML's first run includes its warm-up.
+            auto timeRuns = [&] (bool gpu, int runs)
+            {
+                Session test (api);
+                juce::String ignored;
+                if (! test.openWith (env, model, gpu, ignored))
+                    return -1.0;
+                std::vector<float> input (test.inputSize, 0.0f), output;
+                double best = -1.0;
+                for (int i = 0; i < runs; ++i)
+                {
+                    const auto start = juce::Time::getMillisecondCounterHiRes();
+                    if (! test.run (input, output, ignored))
+                        return -1.0;
+                    const auto seconds = (juce::Time::getMillisecondCounterHiRes() - start) / 1000.0;
+                    best = best < 0.0 ? seconds : std::min (best, seconds);
+                }
+                return best;
+            };
+            const auto gpu = timeRuns (true, 2);
+            const auto cpu = timeRuns (false, 1);
+            const bool faster = gpu > 0.0 && (cpu < 0.0 || gpu < 0.9 * cpu);
+            words = juce::StringArray (juce::String (faster ? "gpu" : "cpu"), juce::String (gpu, 2), juce::String (cpu, 2));
+            record.replaceWithText (words.joinIntoString (" "));
+        }
+        details = " (" + words[1] + " s per chunk on the GPU, " + words[2] + " s on the CPU)";
+        return words[0] == "gpu";
+    }
+
     // One folder per model file version (by size and date), so an updated model never runs with
     // the compiled Core ML version of the previous one. Older versions' folders are removed.
     static juce::File coreMLCacheFolder (const juce::File& model)

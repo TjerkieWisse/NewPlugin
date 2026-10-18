@@ -3,7 +3,7 @@
 // Usage: KitnapAnalyzerTest [output-folder]
 //            builds five synthetic drum parts (kick, snare, toms, hi-hat, cymbals), extracts the kit and
 //            checks that every pad gets its own drum, cut out unchanged; writes the kit when a folder is given
-//        KitnapAnalyzerTest --write-mix beat.wav            writes a synthetic beat with bass and chords
+//        KitnapAnalyzerTest --write-mix beat.wav [seconds]  writes a synthetic beat with bass and chords
 //        KitnapAnalyzerTest --separate song.mp3 drums.wav   writes the AI-separated drum stem
 //        KitnapAnalyzerTest --split drums.wav folder        writes the five parts of a drum stem (kick.wav, ...)
 //        KitnapAnalyzerTest --file-ai song.mp3 [out]        the plugin's full pipeline: separate, split, extract
@@ -411,8 +411,9 @@ int compareFiles (const juce::File& a, const juce::File& b, float limitDb)
     return ok ? 0 : 1;
 }
 
-// --write-mix beat.wav: the synthetic drums with a bass line and chords, for the AI tests.
-int writeMix (const juce::File& file)
+// --write-mix beat.wav [seconds]: the synthetic drums with a bass line and chords, for the AI tests
+// (only the first seconds when given).
+int writeMix (const juce::File& file, double seconds)
 {
     const auto beat = makeBeat();
     std::vector<float> mix (beat.parts[0].size(), 0.0f);
@@ -434,6 +435,8 @@ int writeMix (const juce::File& file)
         const float root = chordRoots[bar];
         mix[(size_t) i] += 0.05f * (std::sin (twoPi * root * t) + std::sin (twoPi * root * 1.26f * t) + std::sin (twoPi * root * 1.5f * t));
     }
+    if (seconds > 0.0)
+        mix.resize (std::min (mix.size(), (size_t) (seconds * sr)));
     writeWav (toStereo (mix), sr, file);
     return 0;
 }
@@ -532,7 +535,7 @@ int syntheticTest (const juce::File& out)
 int main (int argc, char** argv)
 {
     const juce::String mode = argc >= 2 ? argv[1] : "";
-    if (mode == "--write-mix" && argc >= 3)  return writeMix (arg (argv[2]));
+    if (mode == "--write-mix" && argc >= 3)  return writeMix (arg (argv[2]), argc >= 4 ? juce::String (argv[3]).getDoubleValue() : 0.0);
     if (mode == "--separate" && argc >= 4)   return separateFile (arg (argv[2]), arg (argv[3]));
     if (mode == "--split" && argc >= 4)      return splitFile (arg (argv[2]), arg (argv[3]));
     if (mode == "--file-ai" && argc >= 3)    return extractWithAI (arg (argv[2]), argc >= 4 ? arg (argv[3]) : juce::File());

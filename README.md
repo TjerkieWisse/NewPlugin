@@ -42,7 +42,7 @@ KITNAP only uses what the two models give it. Nothing is classified, filtered, a
 
 - How clean a pad sounds is down to the two models: what's left of other drums in a part (a hat under the snare, say) stays in its sound, and a drum the model puts in the wrong part ends up on the wrong pad.
 - Each sound is a single hit from the song, so it carries what was playing at that moment in its part. When the next hit of the same part comes quickly (fast hats), the sound is that short.
-- **On a Mac the AI runs on the GPU** (through Core ML, in 32-bit floats like on the CPU), which is many times faster than the CPU. The first time, Core ML needs a moment to prepare each model for your GPU; that's cached in `~/Library/Caches/KITNAP`. If the GPU can't be used, KITNAP quietly runs everything on the CPU instead.
+- **On a Mac the AI can run on the GPU** (through Core ML, in 32-bit floats like on the CPU). The first time, KITNAP prepares each model for the GPU and times one chunk on the GPU and one on the CPU, then remembers which is faster on that Mac (in `~/Library/Caches/KITNAP`, together with the prepared models), so the first track takes a minute or two longer. If the GPU can't be used, KITNAP quietly runs everything on the CPU instead.
 - On the CPU (Windows and Linux, or a Mac without Core ML) the AI steps take a few minutes for a full song: on 4 cores about 1.8 times the song's length to separate, plus about 1.3 times to split; faster with more cores. They run on one thread per performance core (Apple Silicon's efficiency cores would only hold the others up), and need about 3 GB of memory while separating.
 
 > Sounds pulled from commercial songs are fine for practice and personal use, but clear samples before releasing music with them.
@@ -100,7 +100,7 @@ The plugins end up in `build/KITNAP_artefacts/Release/`. The build downloads ONN
 ./build/KitnapAnalyzerTest_artefacts/Release/KitnapAnalyzerTest --compare a.wav b.wav -40     # how far apart two stems are (fails above -40 dB)
 ```
 
-On a Mac, `KITNAP_CPU_ONLY=1` runs the models on the CPU instead of the GPU, and `KITNAP_ORT_LOG=1` shows ONNX Runtime's details (such as how much of each model Core ML takes on). CI separates and splits the synthetic beat both ways and checks the results match.
+On a Mac, `KITNAP_CPU_ONLY=1` runs the models on the CPU, `KITNAP_FORCE_GPU=1` on the GPU (without timing which is faster), and `KITNAP_ORT_LOG=1` shows ONNX Runtime's details (such as how much of each model Core ML takes on). CI separates and splits a few seconds of the synthetic beat both ways and checks the results match (GitHub's Mac runners have no real GPU, so there Core ML is slow and KITNAP picks the CPU by itself).
 
 On Linux, `-DKITNAP_BUILD_SCREENSHOT=ON` also builds `KitnapScreenshot`, which renders the UI to PNGs (run it under `xvfb-run`).
 

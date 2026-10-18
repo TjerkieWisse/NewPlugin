@@ -4,23 +4,24 @@
 # The plugin loads ONNX Runtime at run time (it is never linked), so a plugin without these files
 # still works: it just skips AI separation.
 
-set(KITNAP_ORT_VERSION 1.20.1)
+# 1.23 is the first version whose Core ML support covers every operation in both models.
+set(KITNAP_ORT_VERSION 1.23.2)
 set(KITNAP_ORT_BASE_URL "https://github.com/microsoft/onnxruntime/releases/download/v${KITNAP_ORT_VERSION}")
 
 if(APPLE)
     set(_ort_package "onnxruntime-osx-universal2-${KITNAP_ORT_VERSION}")
     set(_ort_archive "${_ort_package}.tgz")
-    set(_ort_hash "da4349e01a7e997f5034563183c7183d069caadc1d95f499b560961787813efd")
+    set(_ort_hash "49ae8e3a66ccb18d98ad3fe7f5906b6d7887df8a5edd40f49eb2b14e20885809")
     set(_ort_library "lib/libonnxruntime.${KITNAP_ORT_VERSION}.dylib")
 elseif(WIN32)
     set(_ort_package "onnxruntime-win-x64-${KITNAP_ORT_VERSION}")
     set(_ort_archive "${_ort_package}.zip")
-    set(_ort_hash "78d447051e48bd2e1e778bba378bec4ece11191c9e538cf7b2c4a4565e8f5581")
+    set(_ort_hash "0b38df9af21834e41e73d602d90db5cb06dbd1ca618948b8f1d66d607ac9f3cd")
     set(_ort_library "lib/onnxruntime.dll")
 else()
     set(_ort_package "onnxruntime-linux-x64-${KITNAP_ORT_VERSION}")
     set(_ort_archive "${_ort_package}.tgz")
-    set(_ort_hash "67db4dc1561f1e3fd42e619575c82c601ef89849afc7ea85a003abbac1a1a105")
+    set(_ort_hash "1fa4dcaef22f6f7d5cd81b28c2800414350c10116f5fdd46a2160082551c5f9b")
     set(_ort_library "lib/libonnxruntime.so.${KITNAP_ORT_VERSION}")
 endif()
 

@@ -17,6 +17,39 @@ from torch import nn
 from einops import rearrange, pack, unpack
 from safetensors.torch import load_file
 from bs_roformer import BSRoformer
+from bs_roformer.attend import Attend
+import bs_roformer.bs_roformer as bsr
+from rotary_embedding_torch import RotaryEmbedding
+
+# The model is exported with a few parts written differently, with the same math, so that ONNX
+# Runtime runs it faster and every operation is one Core ML can run on a Mac's GPU:
+# - attention as plain matrix products instead of Einsum (slow on the CPU, not in Core ML)
+def attend(self, q, k, v):
+    sim = torch.matmul(q, k.transpose(-1, -2)) * (q.shape[-1] ** -0.5)
+    return torch.matmul(sim.softmax(dim=-1), v)
+Attend.forward = attend
+
+# - RMSNorm without ReduceL2 and Expand (F.normalize, spelled out)
+def rms_norm(self, x):
+    norm = torch.sqrt(torch.sum(x * x, dim=-1, keepdim=True)).clamp(min=1e-12)
+    return x / norm * self.scale * self.gamma
+bsr.RMSNorm.forward = rms_norm
+
+# - rotary embeddings with the angles worked out beforehand (the sequence lengths are fixed), and
+#   rotate_half(t) * sin as the swapped pairs times sin with alternating signs (no Neg)
+_rotations = {}
+def rotate(self, t, seq_dim=None, offset=0, scale=None):
+    n = t.shape[-2]
+    if (id(self), n) not in _rotations:
+        with torch.no_grad():
+            freqs = self.forward(torch.arange(n, dtype=torch.float32), seq_len=n)
+            sign = torch.tensor([-1.0, 1.0]).repeat(freqs.shape[-1] // 2)
+            _rotations[(id(self), n)] = (freqs.cos(), freqs.sin() * sign)
+    cos, sin = _rotations[(id(self), n)]
+    pairs = t.unflatten(-1, (-1, 2))
+    swapped = torch.cat((pairs[..., 1:2], pairs[..., 0:1]), dim=-1).flatten(-2)
+    return t * cos + swapped * sin
+RotaryEmbedding.rotate_queries_or_keys = rotate
 
 STEMS = ['bass', 'drums', 'other', 'vocals', 'guitar', 'piano']
 FRAMES = 345

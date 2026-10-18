@@ -48,18 +48,18 @@ juce::File findFile (const juce::String& pattern)
 
 juce::File findModel (const ModelSpec& spec) { return findFile (spec.fileName); }
 
-juce::File findRuntimeLibrary()
+// Where the last model ran (for the tests and diagnostics).
+juce::SpinLock backendLock;
+juce::String lastBackend;
+[[maybe_unused]] void setBackend (const juce::String& name)
 {
-   #if JUCE_WINDOWS
-    return findFile ("onnxruntime.dll");
-   #elif JUCE_MAC
-    return findFile ("libonnxruntime*.dylib");
-   #else
-    return findFile ("libonnxruntime.so*");
-   #endif
+    const juce::SpinLock::ScopedLockType lock (backendLock);
+    lastBackend = name;
 }
 
 #if KITNAP_HAS_ONNX
+juce::File findRuntimeLibrary() { return findFile (KITNAP_ORT_LIBRARY_NAME); }
+
 // Loads ONNX Runtime once per process and keeps it loaded (unloading it while a host runs is asking for trouble).
 class Runtime
 {
@@ -98,7 +98,11 @@ private:
             return;
         }
 
-        if (auto* status = api->CreateEnv (ORT_LOGGING_LEVEL_WARNING, "KITNAP", &env))
+        // KITNAP_ORT_LOG=1 in the environment shows ONNX Runtime's details, such as how much of a
+        // model Core ML takes on.
+        const auto logLevel = juce::SystemStats::getEnvironmentVariable ("KITNAP_ORT_LOG", {}).isNotEmpty()
+                                  ? ORT_LOGGING_LEVEL_INFO : ORT_LOGGING_LEVEL_WARNING;
+        if (auto* status = api->CreateEnv (logLevel, "KITNAP", &env))
         {
             error = api->GetErrorMessage (status);
             api->ReleaseStatus (status);
@@ -244,13 +248,19 @@ private:
 struct Session
 {
     explicit Session (const OrtApi* a) : api (a) {}
-    ~Session()
+    ~Session() { release(); }
+
+    void release()
     {
         if (inputName != nullptr) ignore (api->AllocatorFree (allocator, inputName));
         if (outputName != nullptr) ignore (api->AllocatorFree (allocator, outputName));
         if (memoryInfo != nullptr) api->ReleaseMemoryInfo (memoryInfo);
         if (session != nullptr) api->ReleaseSession (session);
         if (options != nullptr) api->ReleaseSessionOptions (options);
+        inputName = outputName = nullptr;
+        memoryInfo = nullptr;
+        session = nullptr;
+        options = nullptr;
     }
 
     void ignore (OrtStatus* status) const
@@ -269,7 +279,32 @@ struct Session
     std::vector<int64_t> inputDims, outputDims;
     size_t inputSize = 0, outputSize = 0; // floats per run
 
-    bool open (OrtEnv* env, const juce::File& model, juce::String& error)
+    bool onGpu = false;
+
+    // On a Mac the models run on the GPU through Core ML, many times faster than on the CPU, in
+    // 32-bit floats like on the CPU (the Neural Engine would only do 16 bits). If Core ML can't be
+    // used, everything runs on the CPU. KITNAP_CPU_ONLY=1 in the environment forces the CPU.
+    bool open (OrtEnv* env, const juce::File& model, [[maybe_unused]] bool allowGpu, juce::String& error)
+    {
+       #if JUCE_MAC
+        if (allowGpu && juce::SystemStats::getEnvironmentVariable ("KITNAP_CPU_ONLY", {}).isEmpty())
+        {
+            if (openWith (env, model, true, error))
+            {
+                onGpu = true;
+                setBackend ("Core ML (GPU)");
+                return true;
+            }
+            DBG ("KITNAP: Core ML unavailable (" << error << "), using the CPU");
+            release();
+            error = {};
+        }
+       #endif
+        setBackend ("CPU");
+        return openWith (env, model, false, error);
+    }
+
+    bool openWith (OrtEnv* env, const juce::File& model, [[maybe_unused]] bool coreML, juce::String& error)
     {
         if (failed (api, api->CreateSessionOptions (&options), error)) return false;
         if (failed (api, api->SetIntraOpNumThreads (options, inferenceThreads()), error)) return false;
@@ -277,6 +312,18 @@ struct Session
         // Planning all buffers ahead keeps every intermediate tensor alive at once; for attention
         // models that alone is gigabytes.
         if (failed (api, api->DisableMemPattern (options), error)) return false;
+
+       #if JUCE_MAC
+        if (coreML)
+        {
+            // Core ML compiles the model the first time; it's kept in the cache folder after that.
+            const auto cache = coreMLCacheFolder (model).getFullPathName();
+            const char* keys[] { "ModelFormat", "MLComputeUnits", "RequireStaticInputShapes", "ModelCacheDirectory" };
+            const char* values[] { "MLProgram", "CPUAndGPU", "1", cache.toRawUTF8() };
+            if (failed (api, api->SessionOptionsAppendExecutionProvider (options, "CoreML", keys, values, 4), error))
+                return false;
+        }
+       #endif
 
        #if JUCE_WINDOWS
         const auto path = model.getFullPathName().toWideCharPointer();
@@ -325,6 +372,23 @@ struct Session
         }
         return true;
     }
+
+   #if JUCE_MAC
+    // One folder per model file version (by size and date), so an updated model never runs with
+    // the compiled Core ML version of the previous one. Older versions' folders are removed.
+    static juce::File coreMLCacheFolder (const juce::File& model)
+    {
+        const auto root = juce::File::getSpecialLocation (juce::File::userHomeDirectory).getChildFile ("Library/Caches/KITNAP/CoreML");
+        const auto prefix = model.getFileNameWithoutExtension() + "-";
+        const auto folder = root.getChildFile (prefix + juce::String (model.getSize()) + "-"
+                                               + juce::String (model.getLastModificationTime().toMilliseconds()));
+        for (auto& old : root.findChildFiles (juce::File::findDirectories, false, prefix + "*"))
+            if (old != folder)
+                old.deleteRecursively();
+        folder.createDirectory();
+        return folder;
+    }
+   #endif
 
     bool run (std::vector<float>& input, std::vector<float>& output, juce::String& error)
     {
@@ -481,6 +545,12 @@ bool DrumSeparator::isAvailable()
     return unavailableReason().isEmpty();
 }
 
+juce::String DrumSeparator::backend()
+{
+    const juce::SpinLock::ScopedLockType lock (backendLock);
+    return lastBackend;
+}
+
 juce::String DrumSeparator::unavailableReason()
 {
    #if KITNAP_HAS_ONNX
@@ -505,29 +575,36 @@ juce::AudioBuffer<float> DrumSeparator::separate (const juce::AudioBuffer<float>
     if (error.isNotEmpty() || source.getNumSamples() == 0 || source.getNumChannels() == 0)
         return {};
 
-    auto& runtime = Runtime::get();
-    Session session (runtime.api);
-    if (! session.open (runtime.env, findModel (drumsModel), error))
-        return {};
-    // BS-RoFormer SW, drums only: [1, 2 channels, 1025 bins, frames, re/im] in and out.
-    const auto& dims = session.inputDims;
-    if (dims.size() != 5 || dims[1] != 2 || dims[2] != (1 << drumsModel.fftOrder) / 2 + 1 || dims[4] != 2
-        || session.outputSize != session.inputSize)
-    {
-        error = "Unexpected separation model format";
-        return {};
-    }
-
     const auto mix = resample (source, sampleRate, modelSampleRate, 2);
-    Spectrogram spectrogram (drumsModel.fftOrder, drumsModel.hop, (int) dims[2], (int) dims[3], true);
+    bool onGpu = false;
+    auto attempt = [&] (bool allowGpu) -> juce::AudioBuffer<float>
+    {
+        auto& runtime = Runtime::get();
+        Session session (runtime.api);
+        if (! session.open (runtime.env, findModel (drumsModel), allowGpu, error))
+            return {};
+        onGpu = session.onGpu;
+        // BS-RoFormer SW, drums only: [1, 2 channels, 1025 bins, frames, re/im] in and out.
+        const auto& dims = session.inputDims;
+        if (dims.size() != 5 || dims[1] != 2 || dims[2] != (1 << drumsModel.fftOrder) / 2 + 1 || dims[4] != 2
+            || session.outputSize != session.inputSize)
+        {
+            error = "Unexpected separation model format";
+            return {};
+        }
+        Spectrogram spectrogram (drumsModel.fftOrder, drumsModel.hop, (int) dims[2], (int) dims[3], true);
 
-    // The model works on short chunks (its attention over time needs memory that grows with the
-    // square of the chunk length); half a second of each chunk's edge is cross-faded with the next.
-    auto stems = runChunked (session, spectrogram, 1, mix, (int) (0.5 * modelSampleRate), { 0 },
-                             progress, shouldCancel, error);
-    if (stems.empty())
-        return {};
-    auto drums = std::move (stems[0]);
+        // The model works on short chunks (its attention over time needs memory that grows with the
+        // square of the chunk length); half a second of each chunk's edge is cross-faded with the next.
+        auto stems = runChunked (session, spectrogram, 1, mix, (int) (0.5 * modelSampleRate), { 0 },
+                                 progress, shouldCancel, error);
+        return stems.empty() ? juce::AudioBuffer<float>() : std::move (stems[0]);
+    };
+
+    // If the GPU fails along the way, the CPU does it all again.
+    auto drums = attempt (true);
+    if (drums.getNumSamples() == 0 && onGpu && ! (shouldCancel && shouldCancel()))
+        drums = attempt (false);
     return drums;
    #else
     juce::ignoreUnused (source, sampleRate, progress, shouldCancel);
@@ -547,26 +624,35 @@ std::vector<juce::AudioBuffer<float>> DrumSeparator::split (const juce::AudioBuf
     if (error.isNotEmpty() || drums.getNumSamples() == 0 || drums.getNumChannels() == 0)
         return {};
 
-    auto& runtime = Runtime::get();
-    Session session (runtime.api);
-    if (! session.open (runtime.env, findModel (splitModel), error))
-        return {};
-    // DrumSep (MDX23C): [1, 4, bins, frames] in, [1, parts, 4, bins, frames] out.
-    const auto& dims = session.inputDims;
-    if (dims.size() != 4 || dims[1] != 4 || dims[2] > (1 << splitModel.fftOrder) / 2 + 1
-        || session.outputSize != session.inputSize * (size_t) numDrumParts)
-    {
-        error = "Unexpected drum split model format";
-        return {};
-    }
-
-    Spectrogram spectrogram (splitModel.fftOrder, splitModel.hop, (int) dims[2], (int) dims[3]);
     std::vector<int> parts;
     for (auto part : wanted)
         parts.push_back ((int) part);
-    // Chunks overlap by half: every sample is covered twice.
-    auto result = runChunked (session, spectrogram, numDrumParts, drums, spectrogram.chunkLength() / 2, parts,
-                              progress, shouldCancel, error);
+    bool onGpu = false;
+    auto attempt = [&] (bool allowGpu) -> std::vector<juce::AudioBuffer<float>>
+    {
+        auto& runtime = Runtime::get();
+        Session session (runtime.api);
+        if (! session.open (runtime.env, findModel (splitModel), allowGpu, error))
+            return {};
+        onGpu = session.onGpu;
+        // DrumSep (MDX23C): [1, 4, bins, frames] in, [1, parts, 4, bins, frames] out.
+        const auto& dims = session.inputDims;
+        if (dims.size() != 4 || dims[1] != 4 || dims[2] > (1 << splitModel.fftOrder) / 2 + 1
+            || session.outputSize != session.inputSize * (size_t) numDrumParts)
+        {
+            error = "Unexpected drum split model format";
+            return {};
+        }
+        Spectrogram spectrogram (splitModel.fftOrder, splitModel.hop, (int) dims[2], (int) dims[3]);
+        // Chunks overlap by half: every sample is covered twice.
+        return runChunked (session, spectrogram, numDrumParts, drums, spectrogram.chunkLength() / 2, parts,
+                           progress, shouldCancel, error);
+    };
+
+    // If the GPU fails along the way, the CPU does it all again.
+    auto result = attempt (true);
+    if (result.empty() && onGpu && ! (shouldCancel && shouldCancel()))
+        result = attempt (false);
     return result;
    #else
     juce::ignoreUnused (drums, wanted, progress, shouldCancel);

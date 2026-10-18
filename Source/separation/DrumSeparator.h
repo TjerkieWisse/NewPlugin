@@ -25,6 +25,9 @@ public:
     // Why isAvailable() is false, for showing to the user.
     static juce::String unavailableReason();
 
+    // Where the last model run happened: "Core ML (GPU)" on a Mac, otherwise "CPU".
+    static juce::String backend();
+
     // Returns the drum stem at modelSampleRate (stereo), or an empty buffer on failure or cancel.
     // progress receives 0..1. Runs on the calling thread and takes a few minutes for a full song.
     static juce::AudioBuffer<float> separate (const juce::AudioBuffer<float>& source, double sampleRate,

@@ -32,7 +32,7 @@ The whole kit (every variation, the hit map and the waveform) is saved inside yo
 
 KITNAP only uses what the two models give it. Nothing is classified, filtered, averaged or generated afterwards.
 
-1. **Separate the drums (AI).** BS-RoFormer SW, a band-split transformer model, run on the CPU with ONNX Runtime, removes everything that isn't drums. The song is processed in 4-second chunks that are cross-faded over half a second. (The model was trained on 13-second chunks, but its memory use grows with the square of the chunk length: over 14 GB at 13 s, about 3 GB at 4 s, with a result within −22 dB of the 13 s one.)
+1. **Separate the drums (AI).** BS-RoFormer SW, a band-split transformer model, run with ONNX Runtime, removes everything that isn't drums. The song is processed in 4-second chunks that are cross-faded over half a second. (The model was trained on 13-second chunks, but its memory use grows with the square of the chunk length: over 14 GB at 13 s, about 3 GB at 4 s, with a result within −22 dB of the 13 s one.)
 2. **Split the kit (AI).** A second model (DrumSep 5 stems, MDX23C) splits the drum stem into kick, snare, toms, hi-hat and cymbals, in 12-second chunks that overlap by half and are cross-faded. These five parts are the five pads: whatever the model puts in the snare part ends up on the snare pad, and so on.
 3. **Find the hits in each part.** Spectral-flux onset detection, then each hit is pinned to where its attack rises most above what was sounding just before. Whatever the split leaves of other drums in a part is far quieter than the part's own hits, so only hits within 30 dB of the part's loud ones count (and a part that is more than 35 dB below the loudest one, like the toms part of a song without toms, stays empty).
 4. **Group the hits that sound alike.** Every hit gets a fingerprint: its level in 24 frequency bands over its first 80 ms, minus whatever was still ringing from before it, relative to its own loudest band. Hits whose fingerprints are close are the same sound; how close depends on how consistent the part is (a programmed sample barely changes, a live drummer does). Each group is a variation on the pad, the most frequent first. A sound that occurs only once (or in under 2% of the part's hits) is left out.
@@ -42,7 +42,8 @@ KITNAP only uses what the two models give it. Nothing is classified, filtered, a
 
 - How clean a pad sounds is down to the two models: what's left of other drums in a part (a hat under the snare, say) stays in its sound, and a drum the model puts in the wrong part ends up on the wrong pad.
 - Each sound is a single hit from the song, so it carries what was playing at that moment in its part. When the next hit of the same part comes quickly (fast hats), the sound is that short.
-- The AI steps take several minutes for a full song on a laptop CPU (on 4 cores about 2.6 times the song's length to separate, plus about 1.5 times to split; faster with more cores), and need about 3 GB of memory while separating. They run on one thread per performance core (Apple Silicon's efficiency cores would only hold the others up).
+- **On a Mac the AI runs on the GPU** (through Core ML, in 32-bit floats like on the CPU), which is many times faster than the CPU. The first time, Core ML needs a moment to prepare each model for your GPU; that's cached in `~/Library/Caches/KITNAP`. If the GPU can't be used, KITNAP quietly runs everything on the CPU instead.
+- On the CPU (Windows and Linux, or a Mac without Core ML) the AI steps take a few minutes for a full song: on 4 cores about 1.8 times the song's length to separate, plus about 1.3 times to split; faster with more cores. They run on one thread per performance core (Apple Silicon's efficiency cores would only hold the others up), and need about 3 GB of memory while separating.
 
 > Sounds pulled from commercial songs are fine for practice and personal use, but clear samples before releasing music with them.
 
@@ -64,7 +65,7 @@ Every push builds the Mac installer and plugins (Windows and Linux are switched 
 
 ### The AI files
 
-ONNX Runtime ships inside the plugin (`Contents/Resources` in the bundle, or `Resources/` next to the binary). The models (`kitnap_drums_sw.onnx`, 210 MB, and `kitnap_drumsep5.onnx`, 440 MB) are installed once in a shared folder: `C:\ProgramData\KITNAP` on Windows, `/Library/Application Support/KITNAP` on macOS, `~/.config/KITNAP` on Linux. KITNAP loads the runtime only when needed and never links against it. Both models are needed to make a kit: if a file is missing or can't load (e.g. on a very old macOS), loading a track shows why, and kits saved in a project still open and play.
+ONNX Runtime ships inside the plugin (`Contents/Resources` in the bundle, or `Resources/` next to the binary). The models (`kitnap_drums_sw.onnx`, 210 MB, and `kitnap_drumsep5.onnx`, 440 MB) are installed once in a shared folder: `C:\ProgramData\KITNAP` on Windows, `/Library/Application Support/KITNAP` on macOS, `~/.config/KITNAP` on Linux. KITNAP loads the runtime only when needed and never links against it. The separation model is exported with its attention, normalisation and rotary embeddings written out as plain matrix and element-wise operations (the same math), which runs about a third faster on the CPU and lets Core ML take on the whole model. Both models are needed to make a kit: if a file is missing or can't load (e.g. on a very old macOS), loading a track shows why, and kits saved in a project still open and play.
 
 The models:
 - **Separation:** BS-RoFormer SW (6 stems: bass, drums, other, vocals, guitar, piano; weights released by jarredou), downloaded from the [mixdown-models](https://github.com/mogonzal/mixdown-models/releases/tag/bs-roformer-sw-v1) mirror (checksum verified) and converted by `tools/export_sw.py`, drums only. Input and output `[1, 2, 1025, 345, 2]` (channel, bin, frame, real/imaginary; 2048-point FFT, hop 512).
@@ -81,7 +82,7 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release --parallel
 ```
 
-The plugins end up in `build/KITNAP_artefacts/Release/`. The build downloads ONNX Runtime 1.20.1 and the models (checksums verified), copies the runtime into each plugin, and converts the models to ONNX, which needs Python with PyTorch (`pip install torch onnx onnxruntime pyyaml numpy safetensors BS-RoFormer==0.4.1`); without it the build continues without AI models. The converted models land in `build/kitnap-ai/`: copy them into the shared folder above to use them with a self-built plugin. Pass `-DKITNAP_WITH_AI=OFF` to build without any AI, or `-DKITNAP_WITH_DRUM_SPLIT=OFF` to skip converting the split model (then copy a converted one into the shared folder yourself).
+The plugins end up in `build/KITNAP_artefacts/Release/`. The build downloads ONNX Runtime 1.23.2 and the models (checksums verified), copies the runtime into each plugin, and converts the models to ONNX, which needs Python with PyTorch (`pip install torch onnx onnxruntime pyyaml numpy safetensors BS-RoFormer==0.4.1`); without it the build continues without AI models. The converted models land in `build/kitnap-ai/`: copy them into the shared folder above to use them with a self-built plugin. Pass `-DKITNAP_WITH_AI=OFF` to build without any AI, or `-DKITNAP_WITH_DRUM_SPLIT=OFF` to skip converting the split model (then copy a converted one into the shared folder yourself).
 
 ### Tests
 
@@ -96,7 +97,10 @@ The plugins end up in `build/KITNAP_artefacts/Release/`. The build downloads ONN
 ./build/KitnapAnalyzerTest_artefacts/Release/KitnapAnalyzerTest --file-parts parts kit-out   # only the last step, from those parts
 ./build/KitnapAnalyzerTest_artefacts/Release/KitnapAnalyzerTest --hits parts                 # list the hits found in each part
 ./build/KitnapAnalyzerTest_artefacts/Release/KitnapAnalyzerTest --write-mix beat.wav         # the synthetic drums with bass and chords, for trying the AI
+./build/KitnapAnalyzerTest_artefacts/Release/KitnapAnalyzerTest --compare a.wav b.wav -40     # how far apart two stems are (fails above -40 dB)
 ```
+
+On a Mac, `KITNAP_CPU_ONLY=1` runs the models on the CPU instead of the GPU, and `KITNAP_ORT_LOG=1` shows ONNX Runtime's details (such as how much of each model Core ML takes on). CI separates and splits the synthetic beat both ways and checks the results match.
 
 On Linux, `-DKITNAP_BUILD_SCREENSHOT=ON` also builds `KitnapScreenshot`, which renders the UI to PNGs (run it under `xvfb-run`).
 

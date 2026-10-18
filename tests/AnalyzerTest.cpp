@@ -9,6 +9,8 @@
 //        KitnapAnalyzerTest --file-ai song.mp3 [out]        the plugin's full pipeline: separate, split, extract
 //        KitnapAnalyzerTest --file-parts folder [out]       the last step only, from the parts --split wrote
 //        KitnapAnalyzerTest --hits folder                   lists the hits found in those parts
+//        KitnapAnalyzerTest --compare a.wav b.wav [dB]      how far apart two stems are (e.g. GPU and CPU);
+//                                                           fails if more than dB (default -40) below a
 
 #include <juce_audio_formats/juce_audio_formats.h>
 #include "analysis/DrumAnalyzer.h"
@@ -254,7 +256,8 @@ juce::AudioBuffer<float> separate (const juce::AudioBuffer<float>& audio, double
     const auto started = juce::Time::getMillisecondCounterHiRes();
     juce::String error;
     auto drums = DrumSeparator::separate (audio, rate, printProgress, {}, error);
-    std::cout << "\nSeparated in " << juce::roundToInt (juce::Time::getMillisecondCounterHiRes() - started) << " ms\n";
+    std::cout << "\nSeparated in " << juce::roundToInt (juce::Time::getMillisecondCounterHiRes() - started) << " ms on "
+              << DrumSeparator::backend() << "\n";
     if (drums.getNumSamples() == 0)
         std::cerr << "Separation failed: " << error << "\n";
     return drums;
@@ -267,7 +270,8 @@ std::vector<juce::AudioBuffer<float>> split (const juce::AudioBuffer<float>& dru
     juce::String error;
     auto parts = DrumSeparator::split (drums, { Part::kick, Part::snare, Part::toms, Part::hihat, Part::cymbals },
                                        printProgress, {}, error);
-    std::cout << "\nSplit in " << juce::roundToInt (juce::Time::getMillisecondCounterHiRes() - started) << " ms\n";
+    std::cout << "\nSplit in " << juce::roundToInt (juce::Time::getMillisecondCounterHiRes() - started) << " ms on "
+              << DrumSeparator::backend() << "\n";
     if (parts.empty())
         std::cerr << "Split failed: " << error << "\n";
     return parts;
@@ -379,6 +383,32 @@ int listHits (const juce::File& folder)
     for (auto& hit : DrumAnalyzer::extract (parts, rate).hits)
         std::cout << hit.position << " " << drumClassName (hit.drumClass) << "\n";
     return 0;
+}
+
+// --compare a.wav b.wav [dB]: the difference between two renderings of the same stem, relative to
+// the first (RMS, dB). Fails when it's louder than the limit.
+int compareFiles (const juce::File& a, const juce::File& b, float limitDb)
+{
+    double rateA = 0.0, rateB = 0.0;
+    const auto x = readFile (a, rateA), y = readFile (b, rateB);
+    if (x.getNumSamples() == 0 || x.getNumSamples() != y.getNumSamples() || x.getNumChannels() != y.getNumChannels())
+    {
+        std::cerr << "Can't compare: missing files or different lengths\n";
+        return 1;
+    }
+    double signal = 0.0, difference = 0.0;
+    for (int ch = 0; ch < x.getNumChannels(); ++ch)
+        for (int i = 0; i < x.getNumSamples(); ++i)
+        {
+            const double d = x.getSample (ch, i) - y.getSample (ch, i);
+            signal += (double) x.getSample (ch, i) * x.getSample (ch, i);
+            difference += d * d;
+        }
+    const auto db = (float) (10.0 * std::log10 ((difference + 1e-30) / (signal + 1e-30)));
+    const bool ok = db <= limitDb;
+    std::cout << "Difference " << juce::String (db, 1) << " dB (limit " << juce::String (limitDb, 1) << " dB): "
+              << (ok ? "PASS" : "FAIL") << "\n";
+    return ok ? 0 : 1;
 }
 
 // --write-mix beat.wav: the synthetic drums with a bass line and chords, for the AI tests.
@@ -508,6 +538,7 @@ int main (int argc, char** argv)
     if (mode == "--file-ai" && argc >= 3)    return extractWithAI (arg (argv[2]), argc >= 4 ? arg (argv[3]) : juce::File());
     if (mode == "--file-parts" && argc >= 3) return extractParts (arg (argv[2]), argc >= 4 ? arg (argv[3]) : juce::File());
     if (mode == "--hits" && argc >= 3)       return listHits (arg (argv[2]));
+    if (mode == "--compare" && argc >= 4)    return compareFiles (arg (argv[2]), arg (argv[3]), argc >= 5 ? juce::String (argv[4]).getFloatValue() : -40.0f);
     if (mode.startsWith ("--"))
     {
         std::cerr << "Unknown or incomplete option " << mode << "\n";

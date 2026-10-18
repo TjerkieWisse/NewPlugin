@@ -52,7 +52,7 @@ jobs:
           else
             pip install torch
           fi
-          pip install onnx onnxruntime==1.20.1 pyyaml numpy safetensors BS-RoFormer==0.4.1
+          pip install onnx onnxruntime==1.23.2 pyyaml numpy safetensors BS-RoFormer==0.4.1
 
       - name: Configure
         shell: bash
@@ -73,6 +73,19 @@ jobs:
         run: |
           ${{ matrix.test }} --write-mix beat.wav
           ${{ matrix.test }} --file-ai beat.wav
+
+      - name: AI on the GPU matches the CPU
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          KITNAP_ORT_LOG=1 ${{ matrix.test }} --separate beat.wav drums-gpu.wav 2>&1 | grep -iE "coreml|separated" || true
+          KITNAP_CPU_ONLY=1 ${{ matrix.test }} --separate beat.wav drums-cpu.wav
+          ${{ matrix.test }} --compare drums-cpu.wav drums-gpu.wav -40
+          KITNAP_ORT_LOG=1 ${{ matrix.test }} --split drums-cpu.wav parts-gpu 2>&1 | grep -iE "coreml|split in" || true
+          KITNAP_CPU_ONLY=1 ${{ matrix.test }} --split drums-cpu.wav parts-cpu
+          for part in kick snare toms hihat cymbals; do
+            ${{ matrix.test }} --compare parts-cpu/$part.wav parts-gpu/$part.wav -40
+          done
 
       - name: Windows installer
         if: runner.os == 'Windows'

@@ -81,7 +81,9 @@ set(KITNAP_DEFINITIONS
 function(kitnap_use_ai target resources)
     if(KITNAP_AI_AVAILABLE)
         target_include_directories(${target} PRIVATE "${KITNAP_ORT_INCLUDE_DIR}")
-        target_compile_definitions(${target} PRIVATE KITNAP_HAS_ONNX=1)
+        # The runtime's exact file name, so a stale copy of another version is never picked up.
+        get_filename_component(_ort_name "${KITNAP_ORT_LIBRARY}" NAME)
+        target_compile_definitions(${target} PRIVATE KITNAP_HAS_ONNX=1 KITNAP_ORT_LIBRARY_NAME="${_ort_name}")
         if(resources)
             kitnap_bundle_ai(${target} "${resources}" ${ARGN})
         endif()

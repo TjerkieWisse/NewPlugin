@@ -19,6 +19,7 @@ struct KitState
     std::vector<kitnap::DetectedHit> hits;
     double hitSampleRate = 44100.0;
     std::vector<float> overview; // min/max pairs, for drawing the waveform
+    std::vector<juce::Range<double>> scanned; // the sections of the song the AI processed (seconds)
 
     std::array<std::vector<kitnap::SamplePtr>, kitnap::numDrumClasses> variations;
     std::array<int, kitnap::numDrumClasses> selected {};

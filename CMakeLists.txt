@@ -62,6 +62,7 @@ target_sources(KITNAP PRIVATE
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
     Source/analysis/DrumAnalyzer.cpp
+    Source/analysis/SongSections.cpp
     Source/separation/DrumSeparator.cpp
     Source/engine/KitSampler.cpp
     Source/ui/WaveformView.cpp
@@ -117,6 +118,7 @@ if(KITNAP_BUILD_TESTS)
     target_sources(KitnapAnalyzerTest PRIVATE
         tests/AnalyzerTest.cpp
         Source/analysis/DrumAnalyzer.cpp
+        Source/analysis/SongSections.cpp
         Source/separation/DrumSeparator.cpp)
     target_include_directories(KitnapAnalyzerTest PRIVATE Source)
     target_compile_definitions(KitnapAnalyzerTest PRIVATE ${KITNAP_DEFINITIONS})
@@ -137,6 +139,7 @@ if(KITNAP_BUILD_SCREENSHOT)
         Source/PluginProcessor.cpp
         Source/PluginEditor.cpp
         Source/analysis/DrumAnalyzer.cpp
+        Source/analysis/SongSections.cpp
         Source/separation/DrumSeparator.cpp
         Source/engine/KitSampler.cpp
         Source/ui/WaveformView.cpp

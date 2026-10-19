@@ -93,16 +93,17 @@ void WaveformView::paint (juce::Graphics& g)
 
     const bool analysing = kit.status == KitState::Status::analysing;
     paintWaveform (g, inner, analysing ? 0.45f : 1.0f);
+    paintSections (g, inner);
 
     if (analysing)
     {
-        // Scanner sweeping across the song: violet while the AI separates, cyan while it splits the kit,
-        // pink while cutting the sounds.
+        // Scanner sweeping through the sections the AI works on: violet while the AI separates, cyan
+        // while it splits the kit, pink while cutting the sounds.
         g.reduceClipRegion (inner.withBottom (lanes.getBottom()).toNearestInt());
         const auto scanColour = stage == KitState::Stage::separating ? theme::forClass (DrumClass::toms)
                               : stage == KitState::Stage::splitting  ? theme::forClass (DrumClass::hihat)
                                                                      : theme::accent;
-        const float x = inner.getX() + inner.getWidth() * juce::jlimit (0.0f, 1.0f, shownProgress);
+        const float x = inner.getX() + inner.getWidth() * songFraction (juce::jlimit (0.0f, 1.0f, shownProgress));
         juce::ColourGradient glow (scanColour.withAlpha (0.0f), x - 80.0f, 0.0f,
                                    scanColour.withAlpha (0.35f), x, 0.0f, false);
         g.setGradientFill (glow);
@@ -180,6 +181,55 @@ void WaveformView::paintWaveform (juce::Graphics& g, juce::Rectangle<float> area
         const float bottom = mid - juce::jlimit (-1.0f, 0.0f, lo) * half;
         g.fillRect (area.getX() + (float) x, top, 1.0f, std::max (1.0f, bottom - top));
     }
+}
+
+// The AI only processes the sections of the song with the most drums: everything else is dimmed,
+// with a bar under each section.
+void WaveformView::paintSections (juce::Graphics& g, juce::Rectangle<float> area)
+{
+    const auto& kit = processor.getKit();
+    const double length = kit.sourceLengthSeconds;
+    if (kit.scanned.empty() || length <= 0.0)
+        return;
+    double covered = 0.0;
+    for (auto& r : kit.scanned)
+        covered += r.getLength();
+    if (covered >= length - 0.1)
+        return; // the whole song
+
+    auto xOf = [&] (double seconds) { return area.getX() + area.getWidth() * (float) juce::jlimit (0.0, 1.0, seconds / length); };
+    float from = area.getX();
+    g.setColour (theme::panel.withAlpha (0.6f));
+    for (auto& r : kit.scanned)
+    {
+        g.fillRect (juce::Rectangle<float>::leftTopRightBottom (from, area.getY(), xOf (r.getStart()), area.getBottom()));
+        from = xOf (r.getEnd());
+    }
+    g.fillRect (juce::Rectangle<float>::leftTopRightBottom (from, area.getY(), area.getRight(), area.getBottom()));
+
+    g.setColour (theme::text.withAlpha (0.35f));
+    for (auto& r : kit.scanned)
+        g.fillRoundedRectangle (juce::Rectangle<float>::leftTopRightBottom (xOf (r.getStart()), area.getBottom() + 3.0f,
+                                                                           xOf (r.getEnd()), area.getBottom() + 5.0f), 1.0f);
+}
+
+// How far through the song the AI is, going through the sections one after the other.
+float WaveformView::songFraction (float progress) const
+{
+    const auto& kit = processor.getKit();
+    if (kit.scanned.empty() || kit.sourceLengthSeconds <= 0.0)
+        return progress;
+    double total = 0.0;
+    for (auto& r : kit.scanned)
+        total += r.getLength();
+    double remaining = progress * total;
+    for (auto& r : kit.scanned)
+    {
+        if (remaining <= r.getLength())
+            return (float) ((r.getStart() + remaining) / kit.sourceLengthSeconds);
+        remaining -= r.getLength();
+    }
+    return (float) (kit.scanned.back().getEnd() / kit.sourceLengthSeconds);
 }
 
 void WaveformView::paintHits (juce::Graphics& g, juce::Rectangle<float> area)

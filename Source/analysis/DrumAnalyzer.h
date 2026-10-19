@@ -53,10 +53,12 @@ class DrumAnalyzer
 {
 public:
     // parts: numDrumClasses stereo buffers, indexed by DrumClass. progress receives values 0..1;
-    // shouldCancel is polled regularly.
+    // shouldCancel is polled regularly. With regions (the song sections joined into the parts, see
+    // SongSections), only hits inside them count, and no sound runs past its region's end.
     static AnalysisResult extract (const std::vector<juce::AudioBuffer<float>>& parts, double sampleRate,
                                    const std::function<void (float)>& progress = {},
-                                   const std::function<bool()>& shouldCancel = {});
+                                   const std::function<bool()>& shouldCancel = {},
+                                   const std::vector<juce::Range<int>>& regions = {});
 
     static constexpr int maxVariationsPerClass = 8;
 };

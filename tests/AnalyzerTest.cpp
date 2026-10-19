@@ -6,7 +6,9 @@
 //        KitnapAnalyzerTest --write-mix beat.wav [seconds]  writes a synthetic beat with bass and chords
 //        KitnapAnalyzerTest --separate song.mp3 drums.wav   writes the AI-separated drum stem
 //        KitnapAnalyzerTest --split drums.wav folder        writes the five parts of a drum stem (kick.wav, ...)
-//        KitnapAnalyzerTest --file-ai song.mp3 [out]        the plugin's full pipeline: separate, split, extract
+//        KitnapAnalyzerTest --file-ai song.mp3 [out]        the plugin's pipeline: pick sections, separate, split, extract
+//        KitnapAnalyzerTest --file-ai-full song.mp3 [out]   the same on the whole song
+//        KitnapAnalyzerTest --sections song.mp3             lists the sections the AI would process
 //        KitnapAnalyzerTest --file-parts folder [out]       the last step only, from the parts --split wrote
 //        KitnapAnalyzerTest --hits folder                   lists the hits found in those parts
 //        KitnapAnalyzerTest --compare a.wav b.wav [dB]      how far apart two stems are (e.g. GPU and CPU);
@@ -14,6 +16,7 @@
 
 #include <juce_audio_formats/juce_audio_formats.h>
 #include "analysis/DrumAnalyzer.h"
+#include "analysis/SongSections.h"
 #include "separation/DrumSeparator.h"
 #include <cmath>
 #include <iostream>
@@ -321,20 +324,45 @@ int splitFile (const juce::File& in, const juce::File& folder)
     return 0;
 }
 
-// --file-ai song [out]: what the plugin does.
-int extractWithAI (const juce::File& in, const juce::File& out)
+void printSections (const SongSections& sections, double songSeconds)
+{
+    double total = 0.0;
+    for (auto& r : sections.seconds())
+    {
+        std::cout << "  " << juce::String (r.getStart(), 1) << " - " << juce::String (r.getEnd(), 1) << " s\n";
+        total += r.getLength();
+    }
+    std::cout << "Sections: " << juce::String (total, 1) << " of " << juce::String (songSeconds, 1) << " s\n";
+}
+
+// --file-ai song [out]: what the plugin does (--file-ai-full: on the whole song).
+int extractWithAI (const juce::File& in, const juce::File& out, bool wholeSong)
 {
     double rate = 0.0;
     const auto audio = readFile (in, rate);
     if (! checkAI() || audio.getNumSamples() == 0)
         return 1;
-    const auto drums = separate (audio, rate);
+    SongSections sections;
+    sections.sampleRate = rate;
+    sections.sections.push_back ({ 0, audio.getNumSamples() });
+    if (! wholeSong)
+        sections = SongSections::pick (audio, rate);
+    printSections (sections, audio.getNumSamples() / rate);
+
+    const auto started = juce::Time::getMillisecondCounterHiRes();
+    const auto drums = separate (sections.join (audio), rate);
     if (drums.getNumSamples() == 0)
         return 1;
     const auto parts = split (drums);
     if (parts.empty())
         return 1;
-    const auto result = extractTimed (parts, DrumSeparator::modelSampleRate);
+    auto result = DrumAnalyzer::extract (parts, DrumSeparator::modelSampleRate, {}, {},
+                                         sections.joinedRanges (DrumSeparator::modelSampleRate));
+    for (auto& hit : result.hits)
+        hit.position = sections.toSong (hit.position, DrumSeparator::modelSampleRate);
+    std::cout << "Total " << juce::roundToInt ((juce::Time::getMillisecondCounterHiRes() - started) / 1000.0) << " s, "
+              << result.hits.size() << " hits\n";
+    printKit (result);
     if (out != juce::File())
         writeKit (result, out);
 
@@ -411,15 +439,15 @@ int compareFiles (const juce::File& a, const juce::File& b, float limitDb)
     return ok ? 0 : 1;
 }
 
-// --write-mix beat.wav [seconds]: the synthetic drums with a bass line and chords, for the AI tests
-// (only the first seconds when given).
-int writeMix (const juce::File& file, double seconds)
+// The synthetic beat with a bass line and chords on top (or only the bass and chords).
+std::vector<float> makeMix (bool withDrums)
 {
     const auto beat = makeBeat();
     std::vector<float> mix (beat.parts[0].size(), 0.0f);
-    for (auto& part : beat.parts)
-        for (size_t i = 0; i < mix.size(); ++i)
-            mix[i] += part[i];
+    if (withDrums)
+        for (auto& part : beat.parts)
+            for (size_t i = 0; i < mix.size(); ++i)
+                mix[i] += part[i];
     const int step = (int) (sr * 60.0 / 120.0 / 4.0);
     const float bassNotes[] { 55.0f, 65.41f, 49.0f, 73.42f };
     const float chordRoots[] { 220.0f, 261.63f, 196.0f, 293.66f };
@@ -435,10 +463,80 @@ int writeMix (const juce::File& file, double seconds)
         const float root = chordRoots[bar];
         mix[(size_t) i] += 0.05f * (std::sin (twoPi * root * t) + std::sin (twoPi * root * 1.26f * t) + std::sin (twoPi * root * 1.5f * t));
     }
+    return mix;
+}
+
+// --write-mix beat.wav [seconds]: the synthetic beat for the AI tests (only the first seconds when given).
+int writeMix (const juce::File& file, double seconds)
+{
+    auto mix = makeMix (true);
     if (seconds > 0.0)
         mix.resize (std::min (mix.size(), (size_t) (seconds * sr)));
     writeWav (toStereo (mix), sr, file);
     return 0;
+}
+
+// --sections song: the sections the AI would process.
+int listSections (const juce::File& file)
+{
+    double rate = 0.0;
+    const auto audio = readFile (file, rate);
+    if (audio.getNumSamples() == 0)
+        return 1;
+    printSections (SongSections::pick (audio, rate), audio.getNumSamples() / rate);
+    return 0;
+}
+
+// A 3-minute song: 30 s without drums, 60 s with, 30 s without, 60 s with. The sections must all
+// have drums in them, from both stretches with drums, and map back to the right place in the song.
+bool sectionTest()
+{
+    const auto drums = makeMix (true), music = makeMix (false);
+    std::vector<float> song;
+    std::vector<juce::Range<double>> withDrums;
+    auto append = [&] (const std::vector<float>& source, double seconds)
+    {
+        const auto start = song.size();
+        for (size_t i = 0; i < (size_t) (seconds * sr); ++i)
+            song.push_back (source[i % source.size()]);
+        return juce::Range<double> (start / sr, song.size() / sr);
+    };
+    append (music, 30.0);
+    withDrums.push_back (append (drums, 60.0));
+    append (music, 30.0);
+    withDrums.push_back (append (drums, 60.0));
+
+    const auto audio = toStereo (song);
+    const auto sections = SongSections::pick (audio, sr);
+    std::cout << "Section picker on a song with drums at 30-90 s and 120-180 s:\n";
+    printSections (sections, song.size() / sr);
+
+    bool ok = ! sections.sections.empty();
+    std::array<bool, 2> covered {};
+    for (auto& r : sections.seconds())
+    {
+        double inDrums = 0.0;
+        for (size_t k = 0; k < withDrums.size(); ++k)
+            if (const auto overlap = r.getIntersectionWith (withDrums[k]).getLength(); overlap > 0.0)
+            {
+                inDrums += overlap;
+                covered[k] = true;
+            }
+        if (inDrums < 0.5 * r.getLength())
+            ok = false;
+    }
+    ok = ok && covered[0] && covered[1];
+
+    // The joined audio maps back onto the song.
+    const auto ranges = sections.joinedRanges (DrumSeparator::modelSampleRate);
+    for (size_t k = 0; k < ranges.size(); ++k)
+    {
+        const int expected = (int) std::lround (sections.sections[k].getStart() * DrumSeparator::modelSampleRate / sr);
+        if (std::abs (sections.toSong (ranges[k].getStart() + 1000, DrumSeparator::modelSampleRate) - (expected + 1000)) > 1)
+            ok = false;
+    }
+    std::cout << (ok ? "Sections OK\n" : "  FAIL: sections without drums, or a stretch with drums missed\n");
+    return ok;
 }
 
 //==============================================================================
@@ -527,6 +625,7 @@ int syntheticTest (const juce::File& out)
 
     if (out != juce::File())
         writeKit (result, out);
+    ok = sectionTest() && ok;
     std::cout << (ok ? "PASS" : "FAIL") << "\n";
     return ok ? 0 : 1;
 }
@@ -538,7 +637,9 @@ int main (int argc, char** argv)
     if (mode == "--write-mix" && argc >= 3)  return writeMix (arg (argv[2]), argc >= 4 ? juce::String (argv[3]).getDoubleValue() : 0.0);
     if (mode == "--separate" && argc >= 4)   return separateFile (arg (argv[2]), arg (argv[3]));
     if (mode == "--split" && argc >= 4)      return splitFile (arg (argv[2]), arg (argv[3]));
-    if (mode == "--file-ai" && argc >= 3)    return extractWithAI (arg (argv[2]), argc >= 4 ? arg (argv[3]) : juce::File());
+    if (mode == "--file-ai" && argc >= 3)    return extractWithAI (arg (argv[2]), argc >= 4 ? arg (argv[3]) : juce::File(), false);
+    if (mode == "--file-ai-full" && argc >= 3) return extractWithAI (arg (argv[2]), argc >= 4 ? arg (argv[3]) : juce::File(), true);
+    if (mode == "--sections" && argc >= 3)   return listSections (arg (argv[2]));
     if (mode == "--file-parts" && argc >= 3) return extractParts (arg (argv[2]), argc >= 4 ? arg (argv[3]) : juce::File());
     if (mode == "--hits" && argc >= 3)       return listHits (arg (argv[2]));
     if (mode == "--compare" && argc >= 4)    return compareFiles (arg (argv[2]), arg (argv[3]), argc >= 5 ? juce::String (argv[4]).getFloatValue() : -40.0f);

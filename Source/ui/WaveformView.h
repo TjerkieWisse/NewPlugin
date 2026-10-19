@@ -24,6 +24,8 @@ private:
     void paintEmpty (juce::Graphics&, juce::Rectangle<float> area);
     void paintWaveform (juce::Graphics&, juce::Rectangle<float> area, float brightness);
     void paintHits (juce::Graphics&, juce::Rectangle<float> area);
+    void paintSections (juce::Graphics&, juce::Rectangle<float> area);
+    float songFraction (float progress) const;
 
     KitnapAudioProcessor& processor;
     double time = 0.0, revealStart = -10.0;

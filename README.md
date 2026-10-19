@@ -12,8 +12,8 @@ Runs as VST3 (any DAW), AU (Logic, GarageBand) and as a standalone app.
 
 1. Put KITNAP on an instrument track.
 2. Drop an audio file on the big strip at the top, or click it to browse. WAV, AIFF, FLAC, MP3 and OGG all work.
-3. Watch the drums get kidnapped. First the AI separates the drums from the rest of the song (violet scanner), then splits them into kick, snare, toms, hi-hat and cymbals (cyan scanner), then every hit lights up in its drum's colour along the waveform. A full song takes a few minutes; the kit is saved with your project, so this only happens once.
-4. Click a pad to hear it. Use ◀ ▶ to flip through variations, for example when a track has two different snares, or an open and a closed hi-hat. Each pad shows how many hits in the song sound like its current sound.
+3. Watch the drums get kidnapped. KITNAP picks the stretches of the song with the most drums (the rest of the waveform dims), then the AI separates the drums from the rest of the song (violet scanner), then splits them into kick, snare, toms, hi-hat and cymbals (cyan scanner), then every hit lights up in its drum's colour along the waveform. A full song takes a few minutes; the kit is saved with your project, so this only happens once.
+4. Click a pad to hear it. Use ◀ ▶ to flip through variations, for example when a track has two different snares, or an open and a closed hi-hat. Each pad shows how many of the hits the AI heard sound like its current sound.
 5. Drag a pad onto a track or into your sampler to get the WAV, or press **EXPORT KIT** for a folder with all of them.
 
 MIDI uses the General MIDI drum map, so any drum pattern plays it straight away:
@@ -32,6 +32,8 @@ The whole kit (every variation, the hit map and the waveform) is saved inside yo
 
 KITNAP only uses what the two models give it. Nothing is classified, filtered, averaged or generated afterwards.
 
+0. **Pick the sections with drums.** A kit needs one clean hit of each sound, and drum sounds repeat, so the AI doesn't have to hear the whole song. A quick scan (no AI) measures how many sudden attacks every stretch of the song has; the song is divided into five parts, and from each the 12 seconds with the most drum hits are taken (a part far quieter in hits than the busiest, like an intro without drums, is skipped). That's at most a minute of audio, joined with half a second of silence between the sections, so a 4-minute song takes about a quarter of the time. The waveform dims everything outside these sections. Songs under 75 seconds are used whole.
+
 1. **Separate the drums (AI).** BS-RoFormer SW, a band-split transformer model, run with ONNX Runtime, removes everything that isn't drums. The song is processed in 4-second chunks that are cross-faded over half a second. (The model was trained on 13-second chunks, but its memory use grows with the square of the chunk length: over 14 GB at 13 s, about 3 GB at 4 s, with a result within −22 dB of the 13 s one.)
 2. **Split the kit (AI).** A second model (DrumSep 5 stems, MDX23C) splits the drum stem into kick, snare, toms, hi-hat and cymbals, in 12-second chunks that overlap by half and are cross-faded. These five parts are the five pads: whatever the model puts in the snare part ends up on the snare pad, and so on.
 3. **Find the hits in each part.** Spectral-flux onset detection, then each hit is pinned to where its attack rises most above what was sounding just before. Whatever the split leaves of other drums in a part is far quieter than the part's own hits, so only hits within 30 dB of the part's loud ones count (and a part that is more than 35 dB below the loudest one, like the toms part of a song without toms, stays empty).
@@ -40,6 +42,7 @@ KITNAP only uses what the two models give it. Nothing is classified, filtered, a
 
 ### What to expect
 
+- A sound that only occurs outside the picked sections (a crash only at the very start, say) isn't in the kit.
 - How clean a pad sounds is down to the two models: what's left of other drums in a part (a hat under the snare, say) stays in its sound, and a drum the model puts in the wrong part ends up on the wrong pad.
 - Each sound is a single hit from the song, so it carries what was playing at that moment in its part. When the next hit of the same part comes quickly (fast hats), the sound is that short.
 - **On a Mac the AI can run on the GPU** (through Core ML, in 32-bit floats like on the CPU). The first time, KITNAP prepares each model for the GPU and times one chunk on the GPU and one on the CPU, then remembers which is faster on that Mac (in `~/Library/Caches/KITNAP`, together with the prepared models), so the first track takes a minute or two longer. If the GPU can't be used, KITNAP quietly runs everything on the CPU instead.
@@ -86,12 +89,14 @@ The plugins end up in `build/KITNAP_artefacts/Release/`. The build downloads ONN
 
 ### Tests
 
-`KitnapAnalyzerTest` builds five synthetic drum parts (two different kicks, a snare, a tom fill, hats and a crash, with a faint copy of the snare in the kick part like the bleed the split leaves), extracts the kit, and checks that every hit is found at the right place and nothing else, that each drum ends up on its own pad (two kicks and two toms as variations), and that every sound is a hit of its part, unchanged apart from the fades.
+`KitnapAnalyzerTest` builds five synthetic drum parts (two different kicks, a snare, a tom fill, hats and a crash, with a faint copy of the snare in the kick part like the bleed the split leaves), extracts the kit, and checks that every hit is found at the right place and nothing else, that each drum ends up on its own pad (two kicks and two toms as variations), and that every sound is a hit of its part, unchanged apart from the fades. It also builds a 3-minute song with and without drums and checks the section picker only picks stretches with drums, from both of them.
 
 ```bash
 ./build/KitnapAnalyzerTest_artefacts/Release/KitnapAnalyzerTest            # run the test
 ./build/KitnapAnalyzerTest_artefacts/Release/KitnapAnalyzerTest kit-out    # ...and write the extracted kit as WAVs
-./build/KitnapAnalyzerTest_artefacts/Release/KitnapAnalyzerTest --file-ai song.mp3 kit-out   # the plugin's full pipeline
+./build/KitnapAnalyzerTest_artefacts/Release/KitnapAnalyzerTest --file-ai song.mp3 kit-out   # the plugin's pipeline
+./build/KitnapAnalyzerTest_artefacts/Release/KitnapAnalyzerTest --file-ai-full song.mp3 kit-out   # the same on the whole song
+./build/KitnapAnalyzerTest_artefacts/Release/KitnapAnalyzerTest --sections song.mp3          # which sections the AI would process
 ./build/KitnapAnalyzerTest_artefacts/Release/KitnapAnalyzerTest --separate song.mp3 drums.wav   # write the AI drum stem
 ./build/KitnapAnalyzerTest_artefacts/Release/KitnapAnalyzerTest --split drums.wav parts      # write its five parts (kick, snare, toms, hi-hat, cymbals)
 ./build/KitnapAnalyzerTest_artefacts/Release/KitnapAnalyzerTest --file-parts parts kit-out   # only the last step, from those parts

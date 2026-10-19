@@ -116,8 +116,8 @@ void PadComponent::paint (juce::Graphics& g)
     // Footer: how often the sound occurs, and the variation picker.
     g.setFont (theme::font (12.0f));
     g.setColour (theme::textDim);
-    // The sound is one hit from the song; this says how many of the song's hits sound like it.
-    g.drawText (juce::String (sample->hitsStacked) + "x in the song  " + theme::dot() + "  drag me", footer, juce::Justification::centredLeft);
+    // The sound is one hit from the song; this says how many of the hits the AI heard sound like it.
+    g.drawText ("heard " + juce::String (sample->hitsStacked) + "x  " + theme::dot() + "  drag me", footer, juce::Justification::centredLeft);
 
     if (variationCount > 1)
     {

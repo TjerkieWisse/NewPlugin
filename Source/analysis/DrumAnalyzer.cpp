@@ -250,9 +250,23 @@ float rms (const std::vector<float>& x, int from, int to)
 }
 
 // Finds the hits in one part, with where each one's sound ends.
-std::vector<Hit> findHits (const std::vector<float>& x, double sr, DrumClass drumClass, float loudestPart)
+// Only hits inside `regions` count (all of x when empty), from 30 ms after a region's start on (its
+// first moments may be the middle of a sound), and a sound ends at its region's end at the latest.
+std::vector<Hit> findHits (const std::vector<float>& x, double sr, DrumClass drumClass, float loudestPart,
+                           std::vector<juce::Range<int>> regions)
 {
     const int n = (int) x.size();
+    const bool wholePart = regions.empty();
+    if (wholePart)
+        regions.push_back ({ 0, n });
+    auto regionOf = [&] (int position) -> const juce::Range<int>*
+    {
+        for (auto& r : regions)
+            if (r.contains (position))
+                return &r;
+        return nullptr;
+    };
+    const int settle = (int) (0.03 * sr);
     // Of the first difference, which favours the attack's high end over low notes still ringing.
     std::vector<double> energy ((size_t) n + 1, 0.0);
     for (int i = 0; i < n; ++i)
@@ -273,6 +287,9 @@ std::vector<Hit> findHits (const std::vector<float>& x, double sr, DrumClass dru
     std::vector<Hit> hits;
     for (int onset : onsets)
     {
+        const auto* region = regionOf (onset);
+        if (region == nullptr || (! wholePart && onset < region->getStart() + settle))
+            continue;
         Hit h;
         h.onset = onset;
         for (int i = onset; i < std::min (n, onset + (int) (0.05 * sr)); ++i)
@@ -303,7 +320,7 @@ std::vector<Hit> findHits (const std::vector<float>& x, double sr, DrumClass dru
         // The part's next hit, counting the ones too quiet to keep.
         const auto following = std::upper_bound (onsets.begin(), onsets.end(), h.onset);
         const int next = following != onsets.end() ? *following - preroll : n;
-        h.end = std::min ({ next, h.onset + maxLength, n });
+        h.end = std::min ({ next, h.onset + maxLength, regionOf (h.onset)->getEnd() });
 
         // Where it has died away, if that comes sooner: 45 dB below its loudest 10 ms, and staying
         // there for 100 ms (so the sample doesn't carry on with faint bleed from other drums). And
@@ -397,7 +414,8 @@ std::vector<std::vector<size_t>> groupHits (const std::vector<Hit>& hits)
 //==============================================================================
 AnalysisResult DrumAnalyzer::extract (const std::vector<juce::AudioBuffer<float>>& parts, double sr,
                                       const std::function<void (float)>& progress,
-                                      const std::function<bool()>& shouldCancel)
+                                      const std::function<bool()>& shouldCancel,
+                                      const std::vector<juce::Range<int>>& regions)
 {
     AnalysisResult result;
     if ((int) parts.size() != numDrumClasses || sr <= 0.0)
@@ -420,7 +438,7 @@ AnalysisResult DrumAnalyzer::extract (const std::vector<juce::AudioBuffer<float>
         if (part.getNumSamples() == 0 || part.getNumChannels() == 0)
             continue;
         const auto x = toMono (part);
-        auto hits = findHits (x, sr, drumClass, loudestPart);
+        auto hits = findHits (x, sr, drumClass, loudestPart, regions);
         for (auto& h : hits)
             h.print = fingerprinter.make (x, h.onset, h.end - h.onset);
 

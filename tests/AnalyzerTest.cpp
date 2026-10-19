@@ -7,6 +7,7 @@
 //        KitnapAnalyzerTest --separate song.mp3 drums.wav   writes the AI-separated drum stem
 //        KitnapAnalyzerTest --split drums.wav folder        writes the five parts of a drum stem (kick.wav, ...)
 //        KitnapAnalyzerTest --file-ai song.mp3 [out]        the plugin's pipeline: pick sections, separate, split, extract
+//                                                           (out also gets the sections' drum stem and parts)
 //        KitnapAnalyzerTest --file-ai-full song.mp3 [out]   the same on the whole song
 //        KitnapAnalyzerTest --sections song.mp3             lists the sections the AI would process
 //        KitnapAnalyzerTest --file-parts folder [out]       the last step only, from the parts --split wrote
@@ -364,7 +365,15 @@ int extractWithAI (const juce::File& in, const juce::File& out, bool wholeSong)
               << result.hits.size() << " hits\n";
     printKit (result);
     if (out != juce::File())
+    {
+        // The kit, plus what the AI made of the sections (joined), for listening to.
         writeKit (result, out);
+        out.getChildFile ("parts").createDirectory();
+        writeWav (drums, DrumSeparator::modelSampleRate, out.getChildFile ("parts/drums.wav"));
+        for (int part = 0; part < DrumSeparator::numDrumParts; ++part)
+            writeWav (parts[(size_t) part], DrumSeparator::modelSampleRate,
+                      out.getChildFile ("parts/" + juce::String (partFileNames[part]) + ".wav"));
+    }
 
     // Any beat has a kick, a snare and hats.
     auto found = [&] (DrumClass c) { return ! result.kit[(size_t) c].empty(); };

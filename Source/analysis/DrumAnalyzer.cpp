@@ -224,9 +224,10 @@ private:
 };
 
 //==============================================================================
-// Hits that differ by less than sameSoundFactor times the part's typical distance between a hit and
-// its closest match (kept between minSameSound and maxSameSound dB) are the same sound.
-constexpr float minSameSound = 2.0f, maxSameSound = 12.0f, sameSoundFactor = 3.5f;
+// Groups of hits that differ on average by less than sameSoundFactor times the part's typical
+// distance between a hit and its closest match (kept between minSameSound and maxSameSound dB) are
+// the same sound.
+constexpr float minSameSound = 2.0f, maxSameSound = 12.0f, sameSoundFactor = 3.0f;
 
 struct Hit
 {
@@ -358,11 +359,14 @@ std::vector<Hit> findHits (const std::vector<float>& x, double sr, DrumClass dru
     return hits;
 }
 
-// Groups the hits that sound alike. How much hits of the same drum differ depends on the song (a
-// programmed sample barely changes, a live drummer does, and other drums bleed into every part), so
-// the threshold follows the part: a few times the typical distance between a hit and its closest
-// match. The hits with the most close matches lead the groups, so each group forms around its
-// most typical sound; every other hit joins the closest group within the threshold, or starts one.
+// Groups the hits that sound alike, by average-linkage clustering: every hit starts as its own
+// group, and the two groups whose hits are closest on average are merged, again and again, until
+// the closest two are further apart than the threshold. Unlike grouping around one leading hit,
+// a group can't swallow a different sound just because one hit sits between the two (in a song
+// whose beat changes, each beat's kick stays its own sound). How much hits of the same drum differ
+// depends on the song (a programmed sample barely changes, a live drummer does, and other drums
+// bleed into every part), so the threshold follows the part: a few times the typical distance
+// between a hit and its closest match.
 std::vector<std::vector<size_t>> groupHits (const std::vector<Hit>& hits)
 {
     const size_t n = hits.size();
@@ -382,31 +386,67 @@ std::vector<std::vector<size_t>> groupHits (const std::vector<Hit>& hits)
     std::nth_element (typical.begin(), typical.begin() + (long) n / 2, typical.end());
     const float threshold = juce::jlimit (minSameSound, maxSameSound, sameSoundFactor * typical[n / 2]);
 
-    std::vector<int> matches (n, 0);
+    // `between` holds the average distance between groups (updated as they merge); each group
+    // remembers its closest other group, so finding the next merge is a single scan.
+    auto between = distances;
+    std::vector<std::vector<size_t>> members (n);
+    std::vector<bool> alive (n, true);
+    std::vector<size_t> nearest (n, 0);
+    std::vector<float> nearestDistance (n);
+    auto findNearest = [&] (size_t i)
+    {
+        nearestDistance[i] = std::numeric_limits<float>::max();
+        for (size_t k = 0; k < n; ++k)
+            if (k != i && alive[k] && between[i * n + k] < nearestDistance[i])
+            {
+                nearestDistance[i] = between[i * n + k];
+                nearest[i] = k;
+            }
+    };
     for (size_t i = 0; i < n; ++i)
-        for (size_t j = 0; j < n; ++j)
-            matches[i] += j != i && distances[i * n + j] < threshold ? 1 : 0;
-    std::vector<size_t> order (n);
-    std::iota (order.begin(), order.end(), size_t { 0 });
-    std::stable_sort (order.begin(), order.end(), [&] (size_t a, size_t b)
-                      { return matches[a] != matches[b] ? matches[a] > matches[b] : hits[a].peak > hits[b].peak; });
+    {
+        members[i] = { i };
+        findNearest (i);
+    }
+
+    for (;;)
+    {
+        size_t a = n;
+        for (size_t i = 0; i < n; ++i)
+            if (alive[i] && (a == n || nearestDistance[i] < nearestDistance[a]))
+                a = i;
+        if (a == n || nearestDistance[a] > threshold)
+            break;
+
+        // Merge b into a; the distance from the merged group to any other is the size-weighted
+        // average of the two.
+        const size_t b = nearest[a];
+        const auto sizeA = (float) members[a].size(), sizeB = (float) members[b].size();
+        for (size_t k = 0; k < n; ++k)
+            if (alive[k] && k != a && k != b)
+                between[a * n + k] = between[k * n + a] = (sizeA * between[a * n + k] + sizeB * between[b * n + k]) / (sizeA + sizeB);
+        members[a].insert (members[a].end(), members[b].begin(), members[b].end());
+        members[b].clear();
+        alive[b] = false;
+
+        findNearest (a);
+        for (size_t k = 0; k < n; ++k)
+            if (alive[k] && k != a)
+            {
+                if (nearest[k] == a || nearest[k] == b)
+                    findNearest (k);
+                else if (between[k * n + a] < nearestDistance[k])
+                {
+                    nearestDistance[k] = between[k * n + a];
+                    nearest[k] = a;
+                }
+            }
+    }
 
     std::vector<std::vector<size_t>> groups;
-    for (size_t k : order)
-    {
-        int best = -1;
-        float bestDistance = threshold;
-        for (size_t g = 0; g < groups.size(); ++g)
-            if (const float d = distances[k * n + groups[g].front()]; d < bestDistance)
-            {
-                bestDistance = d;
-                best = (int) g;
-            }
-        if (best >= 0)
-            groups[(size_t) best].push_back (k);
-        else
-            groups.push_back ({ k });
-    }
+    for (size_t i = 0; i < n; ++i)
+        if (alive[i])
+            groups.push_back (std::move (members[i]));
     return groups;
 }
 } // namespace
@@ -464,7 +504,9 @@ AnalysisResult DrumAnalyzer::extract (const std::vector<juce::AudioBuffer<float>
         {
             // The cleanest hit: among the loud ones (within 6 dB of the loudest), the one with the most
             // room to ring out, then the least of the previous hit's tail underneath it.
-            const float loudest = hits[group.front()].peak;
+            float loudest = 0.0f;
+            for (size_t k : group)
+                loudest = std::max (loudest, hits[k].peak);
             int longest = 0;
             for (size_t k : group)
                 if (hits[k].peak >= loudest * 0.5f)

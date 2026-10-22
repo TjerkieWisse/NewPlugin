@@ -16,9 +16,11 @@ void WaveformView::tick (double seconds)
     time += seconds;
     shownProgress += 0.15f * (processor.getProgress() - shownProgress);
 
-    // Only redraw while something moves: the scanner, or the pulsing drop zone.
+    // Only redraw while something moves: the scanner, or the pulsing drop zone (a slow pulse, so
+    // every other frame is plenty).
     const auto& kit = processor.getKit();
-    if (kit.status == KitState::Status::analysing || (kit.overview.empty() && kit.status != KitState::Status::ready))
+    ++ticks;
+    if (kit.status == KitState::Status::analysing || (kit.overview.empty() && kit.status != KitState::Status::ready && ticks % 2 == 0))
         repaint();
 }
 

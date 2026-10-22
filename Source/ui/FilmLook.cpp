@@ -5,7 +5,8 @@ using namespace kitnap;
 
 namespace
 {
-constexpr int framesPerSecond = 24;
+constexpr int framesPerSecond = 24; // what the timecode counts
+constexpr int updatesPerSecond = 12; // how often grain, flicker and dust change, as in the mockup
 constexpr int grainFrames = 6;
 constexpr float grainTileSize = 256.0f;
 
@@ -27,7 +28,7 @@ FilmOverlay::FilmOverlay()
 {
     setInterceptsMouseClicks (false, false);
     setVisible (false);
-    scratches.push_back ({ 611.0f, 611.0f, 160 });
+    scratches.push_back ({ 611.0f, 611.0f, 80 });
 }
 
 void FilmOverlay::setOn (bool shouldBeOn)
@@ -35,7 +36,7 @@ void FilmOverlay::setOn (bool shouldBeOn)
     on = shouldBeOn;
     setVisible (on);
     if (on)
-        startTimerHz (framesPerSecond);
+        startTimerHz (updatesPerSecond);
     else
         stopTimer();
 }
@@ -49,14 +50,15 @@ juce::Point<int> FilmOverlay::weaveOffset (float scale) const
 
 void FilmOverlay::timerCallback()
 {
-    ++frame;
-    if (frame % 4 == 0)
+    ++ticks;
+    frame = ticks * framesPerSecond / updatesPerSecond;
+    if (ticks % 2 == 0)
         flicker = flickerLevels[random.nextInt ((int) std::size (flickerLevels))];
-    if (frame % 3 == 0)
-        weave = weavePositions[(frame / 3) % (juce::int64) std::size (weavePositions)];
+    weave = weavePositions[ticks % (juce::int64) std::size (weavePositions)];
 
     grainFrame = random.nextInt (grainFrames);
-    grainOffset = { random.nextFloat() * grainTileSize, random.nextFloat() * grainTileSize };
+    // Whole pixels, so the grain is copied rather than resampled.
+    grainOffset = { (float) random.nextInt ((int) grainTileSize), (float) random.nextInt ((int) grainTileSize) };
 
     // Scratches: one that stays for a few seconds and jitters in place, now and then a short second one.
     const float width = (float) getWidth();
@@ -66,18 +68,18 @@ void FilmOverlay::timerCallback()
         --s.framesLeft;
     }
     scratches.erase (std::remove_if (scratches.begin(), scratches.end(), [] (auto& s) { return s.framesLeft <= 0; }), scratches.end());
-    if (scratches.empty() && random.nextFloat() < 0.04f)
+    if (scratches.empty() && random.nextFloat() < 0.08f)
     {
         const float x = 40.0f + random.nextFloat() * (width - 80.0f);
-        scratches.push_back ({ x, x, 48 + random.nextInt (110) });
+        scratches.push_back ({ x, x, 24 + random.nextInt (56) });
     }
-    if (scratches.size() < 2 && random.nextFloat() < 0.008f)
+    if (scratches.size() < 2 && random.nextFloat() < 0.016f)
     {
         const float x = 40.0f + random.nextFloat() * (width - 80.0f);
-        scratches.push_back ({ x, x, 8 + random.nextInt (12) });
+        scratches.push_back ({ x, x, 4 + random.nextInt (6) });
     }
 
-    // Dust and hairs show for a single frame.
+    // Dust and hairs show for a single update.
     dust.clear();
     auto somewhere = [this] { return juce::Point<float> (random.nextFloat() * (float) getWidth(), random.nextFloat() * (float) getHeight()); };
     auto speck = [&]
@@ -107,7 +109,7 @@ void FilmOverlay::timerCallback()
 // Film grain: dark and light grains, some of them tinted, at the display's real pixel size.
 const juce::Image& FilmOverlay::grainTile (float scale)
 {
-    if (tiles.empty() || tileScale != scale)
+    if (tiles.empty() || ! juce::approximatelyEqual (tileScale, scale))
     {
         tiles.clear();
         tileScale = scale;
@@ -142,8 +144,12 @@ void FilmOverlay::paint (juce::Graphics& g)
 {
     const float scale = g.getInternalContext().getPhysicalPixelScaleFactor();
 
-    g.setFillType (juce::FillType (grainTile (scale), juce::AffineTransform::scale (1.0f / scale).translated (grainOffset)));
-    g.fillRect (getLocalBounds());
+    // Tiled by hand: whole-pixel image copies are much cheaper than a tiled image fill.
+    const auto& tile = grainTile (scale);
+    const int step = (int) grainTileSize;
+    for (int y = (int) grainOffset.y - step; y < getHeight(); y += step)
+        for (int x = (int) grainOffset.x - step; x < getWidth(); x += step)
+            g.drawImageTransformed (tile, juce::AffineTransform::scale (1.0f / scale).translated ((float) x, (float) y));
 
     g.setColour (juce::Colours::white.withAlpha (flicker));
     g.fillAll();
@@ -273,41 +279,56 @@ void FilmCache::paint (juce::Graphics& g)
 }
 
 // Colour fringe (red pulled from the left, blue from the right), warm whites and navy blacks.
+// Integer maths with tables indexed by the pixel's brightness (r + g + b), as this runs on every
+// pixel that changes.
 void FilmCache::grade (juce::Rectangle<int> area)
 {
     area = area.getIntersection (raw.getBounds());
     if (area.isEmpty())
         return;
 
+    struct Tables
+    {
+        int liftR[766], liftG[766], liftB[766], keepG[766], keepB[766]; // keep: out of 256
+        Tables()
+        {
+            for (int sum = 0; sum <= 765; ++sum)
+            {
+                const float light = (float) sum / 765.0f;
+                liftR[sum] = juce::roundToInt (navy.getRed() * shadowLift * (1.0f - light));
+                liftG[sum] = juce::roundToInt (navy.getGreen() * shadowLift * (1.0f - light));
+                liftB[sum] = juce::roundToInt (navy.getBlue() * shadowLift * (1.0f - light));
+                keepG[sum] = juce::roundToInt (256.0f * (1.0f - 0.035f * light));
+                keepB[sum] = juce::roundToInt (256.0f * (1.0f - 0.065f * light));
+            }
+        }
+    };
+    static const Tables t;
+    constexpr int fringe256 = (int) (fringe * 256.0f);
+
     const int shift = std::max (1, juce::roundToInt (fringeShift * scale));
     const int width = raw.getWidth();
     const juce::Image::BitmapData src (raw, juce::Image::BitmapData::readOnly);
     juce::Image::BitmapData dst (graded, area.getX(), area.getY(), area.getWidth(), area.getHeight(), juce::Image::BitmapData::writeOnly);
-    const float lift[] { navy.getRed() * shadowLift, navy.getGreen() * shadowLift, navy.getBlue() * shadowLift };
+    jassert (src.pixelStride == (int) sizeof (juce::PixelARGB));
 
     for (int y = 0; y < area.getHeight(); ++y)
     {
-        const int sy = area.getY() + y;
-        auto pixel = [&] (int x) -> const juce::PixelARGB&
-        {
-            return *reinterpret_cast<const juce::PixelARGB*> (src.getPixelPointer (juce::jlimit (0, width - 1, x), sy));
-        };
+        const auto* line = reinterpret_cast<const juce::PixelARGB*> (src.getLinePointer (area.getY() + y));
         auto* out = reinterpret_cast<juce::PixelARGB*> (dst.getLinePointer (y));
         for (int x = 0; x < area.getWidth(); ++x)
         {
             const int sx = area.getX() + x;
-            const auto& c = pixel (sx);
-            float red = c.getRed() + fringe * (float) (pixel (sx - shift).getRed() - c.getRed());
-            float green = c.getGreen();
-            float blue = c.getBlue() + fringe * (float) (pixel (sx + shift).getBlue() - c.getBlue());
-
-            const float light = (red + green + blue) / 765.0f;
-            red += lift[0] * (1.0f - light);
-            green = (green + lift[1] * (1.0f - light)) * (1.0f - 0.035f * light);
-            blue = (blue + lift[2] * (1.0f - light)) * (1.0f - 0.065f * light);
-
-            auto channel = [] (float v) { return (juce::uint8) juce::jlimit (0, 255, juce::roundToInt (v)); };
-            out[x].setARGB (255, channel (red), channel (green), channel (blue));
+            const auto& c = line[sx];
+            const int left = line[std::max (0, sx - shift)].getRed(), right = line[std::min (width - 1, sx + shift)].getBlue();
+            const int red = c.getRed() + (((left - c.getRed()) * fringe256) >> 8);
+            const int green = c.getGreen();
+            const int blue = c.getBlue() + (((right - c.getBlue()) * fringe256) >> 8);
+            const int sum = juce::jlimit (0, 765, red + green + blue);
+            out[x].setARGB (255,
+                            (juce::uint8) std::min (255, red + t.liftR[sum]),
+                            (juce::uint8) std::min (255, ((green + t.liftG[sum]) * t.keepG[sum]) >> 8),
+                            (juce::uint8) std::min (255, ((blue + t.liftB[sum]) * t.keepB[sum]) >> 8));
         }
     }
 }

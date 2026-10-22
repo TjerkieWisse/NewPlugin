@@ -31,7 +31,7 @@ private:
 
     bool on = false;
     juce::Random random;
-    juce::int64 frame = 0;
+    juce::int64 ticks = 0, frame = 0;
     float flicker = 0.0f;
     juce::Point<float> weave, grainOffset;
     int grainFrame = 0;
@@ -49,7 +49,7 @@ private:
 class FilmCache : public juce::CachedComponentImage
 {
 public:
-    FilmCache (juce::Component& owner, const FilmOverlay& film) : owner (owner), film (film) {}
+    FilmCache (juce::Component& component, const FilmOverlay& filmOverlay) : owner (component), film (filmOverlay) {}
 
     void paint (juce::Graphics&) override;
     bool invalidateAll() override { valid.clear(); return true; }

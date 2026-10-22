@@ -26,6 +26,7 @@ private:
 
     KitnapAudioProcessor& processor;
     double time = 0.0;
+    int ticks = 0;
     float shownProgress = 0.0f;
     bool dragHover = false;
     KitState::Status lastStatus = KitState::Status::empty;

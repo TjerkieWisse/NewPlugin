@@ -4,6 +4,7 @@
 #include "PluginProcessor.h"
 #include "ui/PadComponent.h"
 #include "ui/WaveformView.h"
+#include "ui/FilmLook.h"
 
 class KitnapLookAndFeel : public juce::LookAndFeel_V4
 {
@@ -38,13 +39,24 @@ private:
     void browseForFile();
     void exportKit();
     void dragPadOut (int pad);
+    void paintSurface (juce::Graphics&);
+    void setFilm (bool on);
+
+    // Everything the editor shows, drawn into a cached picture that the film look grades.
+    struct Surface : public juce::Component
+    {
+        std::function<void (juce::Graphics&)> onPaint;
+        void paint (juce::Graphics& g) override { if (onPaint) onPaint (g); }
+    };
 
     KitnapAudioProcessor& processor;
     KitnapLookAndFeel lookAndFeel;
+    FilmOverlay film;
+    Surface surface;
 
     WaveformView waveform;
     std::vector<std::unique_ptr<PadComponent>> pads;
-    juce::TextButton loadButton { "LOAD" }, exportButton { "EXPORT KIT" };
+    juce::TextButton loadButton { "LOAD" }, exportButton { "EXPORT KIT" }, filmButton { "FILM" };
     juce::TooltipWindow tooltips { this };
     juce::Slider volume;
     juce::AudioProcessorValueTreeState::SliderAttachment volumeAttachment;

@@ -15,7 +15,11 @@ void WaveformView::tick (double seconds)
 {
     time += seconds;
     shownProgress += 0.15f * (processor.getProgress() - shownProgress);
-    repaint();
+
+    // Only redraw while something moves: the scanner, or the pulsing drop zone.
+    const auto& kit = processor.getKit();
+    if (kit.status == KitState::Status::analysing || (kit.overview.empty() && kit.status != KitState::Status::ready))
+        repaint();
 }
 
 void WaveformView::mouseUp (const juce::MouseEvent& e)

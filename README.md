@@ -16,6 +16,8 @@ Runs as VST3 (any DAW), AU (Logic, GarageBand) and as a standalone app.
 4. Click a pad to hear it. Use ◀ ▶ to flip through variations, for example when a track has two different snares, or an open and a closed hi-hat. Each pad shows how many of the hits the AI heard sound like its current sound.
 5. Drag a pad onto a track or into your sampler to get the WAV, or press **EXPORT KIT** for a folder with all of them.
 
+The window has a film look (grain, flicker, dust, a faint colour fringe); **FILM** in the header turns it off, and the choice is saved with the project.
+
 MIDI uses the General MIDI drum map, so any drum pattern plays it straight away:
 
 | Pad      | Notes |
@@ -116,7 +118,7 @@ Source/
   analysis/DrumAnalyzer.*   finds the hits in each part, groups them, cuts out the sounds
   separation/DrumSeparator.* AI drum separation and drum split (ONNX Runtime, loaded at run time)
   engine/KitSampler.*       the 5-pad sampler (MIDI, voice handling)
-  ui/                       waveform/drop zone, pads, the FortyVolts theme (fonts, colours, logo)
+  ui/                       waveform/drop zone, pads, the FortyVolts theme (fonts, colours, logo), the film look
   PluginProcessor.*         loading, background analysis, saving with the project, export
   PluginEditor.*            the window
 Resources/                  fonts (Michroma, IBM Plex Sans; SIL Open Font License) and the FortyVolts logo

@@ -16,7 +16,7 @@ public:
     // Called by the editor every frame.
     void tick (double seconds);
     void kitChanged();
-    void setDragHover (bool hovering) { dragHover = hovering; }
+    void setDragHover (bool hovering) { dragHover = hovering; repaint(); }
 
     std::function<void()> onBrowse;
 

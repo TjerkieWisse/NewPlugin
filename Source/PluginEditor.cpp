@@ -17,12 +17,12 @@ KitnapLookAndFeel::KitnapLookAndFeel()
     setColour (juce::BubbleComponent::outlineColourId, theme::ink);
 }
 
-// Outlined buttons; the primary one is solid black with white text.
+// Outlined buttons; the primary one, and a toggle that's on, are solid black with white text.
 void KitnapLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& button, const juce::Colour&,
                                               bool highlighted, bool down)
 {
     auto r = button.getLocalBounds().toFloat().reduced (theme::outline / 2.0f);
-    const bool primary = button.getProperties().getWithDefault ("primary", false);
+    const bool primary = button.getToggleState() || (bool) button.getProperties().getWithDefault ("primary", false);
     const float alpha = button.isEnabled() ? 1.0f : 0.35f;
 
     if (primary)
@@ -36,9 +36,9 @@ void KitnapLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& b
 
 void KitnapLookAndFeel::drawButtonText (juce::Graphics& g, juce::TextButton& button, bool, bool)
 {
-    const bool primary = button.getProperties().getWithDefault ("primary", false);
+    const bool primary = button.getToggleState() || (bool) button.getProperties().getWithDefault ("primary", false);
     g.setColour ((primary ? theme::panel : theme::ink).withAlpha (button.isEnabled() ? 1.0f : 0.35f));
-    g.setFont (theme::display (10.5f));
+    g.setFont (theme::display (button.getHeight() < 30 ? 8.5f : 10.5f));
     g.drawText (button.getButtonText(), button.getLocalBounds(), juce::Justification::centred);
 }
 
@@ -72,7 +72,13 @@ KitnapAudioProcessorEditor::KitnapAudioProcessorEditor (KitnapAudioProcessor& p)
 {
     setLookAndFeel (&lookAndFeel);
 
-    addAndMakeVisible (waveform);
+    surface.setOpaque (true);
+    surface.onPaint = [this] (juce::Graphics& g) { paintSurface (g); };
+    surface.setCachedComponentImage (new FilmCache (surface, film));
+    addAndMakeVisible (surface);
+    addChildComponent (film);
+
+    surface.addAndMakeVisible (waveform);
     waveform.onBrowse = [this] { browseForFile(); };
 
     for (int i = 0; i < KitSampler::numPads; ++i)
@@ -81,24 +87,31 @@ KitnapAudioProcessorEditor::KitnapAudioProcessorEditor (KitnapAudioProcessor& p)
         pad->onPlay = [this, i] { processor.triggerPad (i); };
         pad->onVariation = [this, i] (int delta) { processor.selectVariation (i, processor.getKit().selected[(size_t) i] + delta); };
         pad->onDragOut = [this, i] { dragPadOut (i); };
-        addAndMakeVisible (*pad);
+        surface.addAndMakeVisible (*pad);
         pads.push_back (std::move (pad));
     }
 
     loadButton.onClick = [this] { browseForFile(); };
     exportButton.onClick = [this] { exportKit(); };
     exportButton.getProperties().set ("primary", true);
-    addAndMakeVisible (loadButton);
-    addAndMakeVisible (exportButton);
+    surface.addAndMakeVisible (loadButton);
+    surface.addAndMakeVisible (exportButton);
+
+    filmButton.setClickingTogglesState (true);
+    filmButton.setTooltip ("Film look: grain, flicker and dust over the window");
+    filmButton.setToggleState (processor.apvts.state.getProperty ("film", true), juce::dontSendNotification);
+    filmButton.onClick = [this] { setFilm (filmButton.getToggleState()); };
+    surface.addAndMakeVisible (filmButton);
 
     volume.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
     volume.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
     volume.setTooltip ("Volume");
     volume.setPopupDisplayEnabled (true, true, this);
-    addAndMakeVisible (volume);
+    surface.addAndMakeVisible (volume);
 
     processor.addChangeListener (this);
     setSize (960, 640);
+    setFilm (filmButton.getToggleState());
     refreshPads();
     waveform.kitChanged();
     lastTick = juce::Time::getMillisecondCounterHiRes();
@@ -112,6 +125,18 @@ KitnapAudioProcessorEditor::~KitnapAudioProcessorEditor()
 }
 
 void KitnapAudioProcessorEditor::paint (juce::Graphics& g)
+{
+    g.fillAll (theme::background);
+}
+
+void KitnapAudioProcessorEditor::setFilm (bool on)
+{
+    film.setOn (on);
+    processor.apvts.state.setProperty ("film", on, nullptr);
+    surface.repaint();
+}
+
+void KitnapAudioProcessorEditor::paintSurface (juce::Graphics& g)
 {
     g.fillAll (theme::background);
 
@@ -143,6 +168,9 @@ void KitnapAudioProcessorEditor::paint (juce::Graphics& g)
 
 void KitnapAudioProcessorEditor::resized()
 {
+    surface.setBounds (getLocalBounds());
+    film.setBounds (getLocalBounds());
+
     auto area = getLocalBounds().reduced (24, 0);
     auto header = area.removeFromTop (80);
 
@@ -152,6 +180,8 @@ void KitnapAudioProcessorEditor::resized()
     loadButton.setBounds (controls.removeFromRight (84));
     controls.removeFromRight (16);
     volume.setBounds (controls.removeFromRight (36));
+    controls.removeFromRight (50); // "VOL"
+    filmButton.setBounds (controls.removeFromRight (52).withSizeKeepingCentre (52, 22));
 
     waveform.setBounds (area.removeFromTop (210));
     area.removeFromTop (18);

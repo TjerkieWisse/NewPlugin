@@ -12,7 +12,7 @@ Runs as VST3 (any DAW), AU (Logic, GarageBand) and as a standalone app.
 
 1. Put KITNAP on an instrument track.
 2. Drop an audio file on the big strip at the top, or click it to browse. WAV, AIFF, FLAC, MP3 and OGG all work.
-3. Watch the drums get kidnapped. KITNAP picks the stretches of the song with the most drums (the rest of the waveform dims), then the AI separates the drums from the rest of the song (violet scanner), then splits them into kick, snare, toms, hi-hat and cymbals (cyan scanner), then every hit lights up in its drum's colour along the waveform. A full song takes a few minutes; the kit is saved with your project, so this only happens once.
+3. Watch the drums get kidnapped: a scanner sweeps through the song while the AI separates the drums from the rest of the song, splits them into kick, snare, toms, hi-hat and cymbals, and cuts out the sounds. A full song takes a few minutes; the kit is saved with your project, so this only happens once.
 4. Click a pad to hear it. Use ◀ ▶ to flip through variations, for example when a track has two different snares, or an open and a closed hi-hat. Each pad shows how many of the hits the AI heard sound like its current sound.
 5. Drag a pad onto a track or into your sampler to get the WAV, or press **EXPORT KIT** for a folder with all of them.
 
@@ -32,7 +32,7 @@ The whole kit (every variation, the hit map and the waveform) is saved inside yo
 
 KITNAP only uses what the two models give it. Nothing is classified, filtered, averaged or generated afterwards.
 
-0. **Pick the sections with drums.** A kit needs one clean hit of each sound, and drum sounds repeat, so the AI doesn't have to hear the whole song. A quick scan (no AI) measures how many sudden attacks every stretch of the song has; the song is divided into five parts, and from each the 12 seconds with the most drum hits are taken (a part far quieter in hits than the busiest, like an intro without drums, is skipped). That's at most a minute of audio, joined with half a second of silence between the sections, so a 4-minute song takes about a quarter of the time. The waveform dims everything outside these sections. Songs under 75 seconds are used whole.
+0. **Pick the sections with drums.** A kit needs one clean hit of each sound, and drum sounds repeat, so the AI doesn't have to hear the whole song. A quick scan (no AI) measures how many sudden attacks every stretch of the song has; the song is divided into five parts, and from each the 12 seconds with the most drum hits are taken (a part far quieter in hits than the busiest, like an intro without drums, is skipped). That's at most a minute of audio, joined with half a second of silence between the sections, so a 4-minute song takes about a quarter of the time. The editor doesn't show which sections were picked: its scanner sweeps evenly through the whole song. Songs under 75 seconds are used whole.
 
 1. **Separate the drums (AI).** BS-RoFormer SW, a band-split transformer model, run with ONNX Runtime, removes everything that isn't drums. The song is processed in 4-second chunks that are cross-faded over half a second. (The model was trained on 13-second chunks, but its memory use grows with the square of the chunk length: over 14 GB at 13 s, about 3 GB at 4 s, with a result within −22 dB of the 13 s one.)
 2. **Split the kit (AI).** A second model (DrumSep 5 stems, MDX23C) splits the drum stem into kick, snare, toms, hi-hat and cymbals, in 12-second chunks that overlap by half and are cross-faded. These five parts are the five pads: whatever the model puts in the snare part ends up on the snare pad, and so on.
@@ -116,9 +116,10 @@ Source/
   analysis/DrumAnalyzer.*   finds the hits in each part, groups them, cuts out the sounds
   separation/DrumSeparator.* AI drum separation and drum split (ONNX Runtime, loaded at run time)
   engine/KitSampler.*       the 5-pad sampler (MIDI, voice handling)
-  ui/                       waveform/drop zone, pads, colours
+  ui/                       waveform/drop zone, pads, the FortyVolts theme (fonts, colours, logo)
   PluginProcessor.*         loading, background analysis, saving with the project, export
   PluginEditor.*            the window
+Resources/                  fonts (Michroma, IBM Plex Sans; SIL Open Font License) and the FortyVolts logo
 tests/                      analyzer test and screenshot tool
 installer/                  Windows (Inno Setup), macOS (pkg) and Linux installers
 cmake/KitnapAI.cmake        downloads ONNX Runtime + models, converts them, bundles the runtime

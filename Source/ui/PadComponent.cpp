@@ -4,7 +4,7 @@
 using namespace kitnap;
 
 PadComponent::PadComponent (int padIndex)
-    : pad (padIndex), colour (theme::forClass ((DrumClass) padIndex))
+    : pad (padIndex)
 {
     setMouseCursor (juce::MouseCursor::PointingHandCursor);
 }
@@ -67,30 +67,28 @@ void PadComponent::rebuildWaveform()
 
 void PadComponent::paint (juce::Graphics& g)
 {
-    auto area = getLocalBounds().toFloat().reduced (1.0f);
+    auto area = getLocalBounds().toFloat().reduced (theme::outline / 2.0f);
     const bool hasSound = sample != nullptr;
-    const float glow = hasSound ? activity : 0.0f;
+    const float glow = hasSound ? juce::jlimit (0.0f, 1.0f, activity) : 0.0f;
 
-    // Body with a glow that flares when the pad is hit.
-    juce::ColourGradient body (theme::panel.interpolatedWith (colour, 0.05f + 0.35f * glow), area.getX(), area.getY(),
-                               theme::panel.darker (0.2f), area.getX(), area.getBottom(), false);
-    g.setGradientFill (body);
-    g.fillRoundedRectangle (area, 14.0f);
+    // White pad that flashes black when it's hit; the ink flips to white with it.
+    const auto ground = theme::panel.interpolatedWith (theme::ink, glow);
+    const auto ink = theme::ink.interpolatedWith (theme::panel, glow);
+    const auto dim = theme::inkDim.interpolatedWith (theme::panel.withAlpha (0.7f), glow);
+    g.setColour (ground);
+    g.fillRoundedRectangle (area, theme::radius);
+    g.setColour (hasSound ? theme::ink : theme::ink.withAlpha (0.25f));
+    g.drawRoundedRectangle (area, theme::radius, hover && hasSound ? theme::outline * 2.0f : theme::outline);
 
-    g.setColour (hasSound ? colour.withAlpha (0.35f + 0.65f * glow + (hover ? 0.2f : 0.0f)) : theme::panelEdge);
-    g.drawRoundedRectangle (area, 14.0f, 1.0f + 1.5f * glow);
+    auto content = area.reduced (16.0f, 14.0f);
+    auto header = content.removeFromTop (18.0f);
 
-    auto content = area.reduced (16.0f, 12.0f);
-    auto header = content.removeFromTop (22.0f);
-
-    g.setColour (hasSound ? colour : theme::textDim);
-    g.fillEllipse (header.getX(), header.getCentreY() - 4.0f, 8.0f, 8.0f);
-    g.setFont (theme::font (16.0f, true));
-    g.setColour (hasSound ? theme::text : theme::textDim);
-    g.drawText (drumClassName ((DrumClass) pad), header.withTrimmedLeft (16.0f), juce::Justification::centredLeft);
+    g.setFont (theme::display (12.0f));
+    g.setColour (hasSound ? ink : theme::inkDim);
+    g.drawText (juce::String (drumClassName ((DrumClass) pad)).toUpperCase(), header, juce::Justification::centredLeft);
 
     g.setFont (theme::font (12.0f));
-    g.setColour (theme::textDim);
+    g.setColour (dim);
     g.drawText (juce::MidiMessage::getMidiNoteName (KitSampler::noteForPad (pad), true, true, 3), header,
                 juce::Justification::centredRight);
 
@@ -105,38 +103,38 @@ void PadComponent::paint (juce::Graphics& g)
     }
 
     // Sound shape
-    auto wave = content.reduced (0.0f, 4.0f);
+    auto wave = content.reduced (0.0f, 6.0f);
     auto shape = waveform;
     shape.applyTransform (juce::AffineTransform::scale (wave.getWidth(), wave.getHeight()).translated (wave.getX(), wave.getY()));
-    g.setColour (colour.withAlpha (0.25f + 0.5f * glow));
+    g.setColour (ink.withAlpha (0.12f));
     g.fillPath (shape);
-    g.setColour (colour.withAlpha (0.8f));
+    g.setColour (ink);
     g.strokePath (shape, juce::PathStrokeType (1.0f));
 
     // Footer: how often the sound occurs, and the variation picker.
     g.setFont (theme::font (12.0f));
-    g.setColour (theme::textDim);
+    g.setColour (dim);
     // The sound is one hit from the song; this says how many of the hits the AI heard sound like it.
     g.drawText ("heard " + juce::String (sample->hitsStacked) + "x  " + theme::dot() + "  drag me", footer, juce::Justification::centredLeft);
 
     if (variationCount > 1)
     {
-        g.setColour (theme::text);
-        g.setFont (theme::font (13.0f, true));
+        g.setColour (ink);
+        g.setFont (theme::font (12.0f, true));
         g.drawText (juce::String (variation + 1) + "/" + juce::String (variationCount),
                     footer.removeFromRight (86.0f).withTrimmedLeft (26.0f).withTrimmedRight (30.0f), juce::Justification::centred);
 
         auto drawArrow = [&] (juce::Rectangle<float> r, bool left)
         {
             r = r.withSizeKeepingCentre (22.0f, 22.0f);
-            g.setColour (colour.withAlpha (0.18f));
-            g.fillEllipse (r);
+            g.drawRoundedRectangle (r.reduced (0.5f), 5.0f, 1.0f);
             juce::Path p;
             const auto c = r.getCentre();
             const float d = left ? -1.0f : 1.0f;
-            p.addTriangle (c.x + 4.0f * d, c.y, c.x - 3.0f * d, c.y - 5.0f, c.x - 3.0f * d, c.y + 5.0f);
-            g.setColour (colour);
-            g.fillPath (p);
+            p.startNewSubPath (c.x - 2.0f * d, c.y - 4.5f);
+            p.lineTo (c.x + 2.5f * d, c.y);
+            p.lineTo (c.x - 2.0f * d, c.y + 4.5f);
+            g.strokePath (p, juce::PathStrokeType (1.5f));
         };
         drawArrow (previousArea(), true);
         drawArrow (nextArea(), false);

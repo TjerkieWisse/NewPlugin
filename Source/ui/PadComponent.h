@@ -28,7 +28,6 @@ private:
     void rebuildWaveform();
 
     int pad;
-    juce::Colour colour;
     kitnap::SamplePtr sample;
     int variation = 0, variationCount = 0;
     float activity = 0.0f;

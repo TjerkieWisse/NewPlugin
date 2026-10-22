@@ -82,7 +82,6 @@ struct KitnapAudioProcessor::AnalysisOutput
     juce::String error;
     double sampleRate = 44100.0, lengthSeconds = 0.0;
     std::vector<float> overview;
-    std::vector<juce::Range<double>> scanned;
     AnalysisResult result;
     std::array<int, numDrumClasses> selection {};
     double analysisSampleRate = 44100.0;
@@ -140,8 +139,6 @@ public:
 
         // Only the parts of the song with the most drum hits go through the AI (at most a minute).
         const auto sections = SongSections::pick (audio, reader->sampleRate);
-        output->scanned = sections.seconds();
-        sectionsReady.store (true);
         const auto joined = sections.join (audio);
 
         // 1. The first model pulls the drums out of the mix. 2. The second splits them into kick, snare,
@@ -188,7 +185,7 @@ public:
     }
 
     std::unique_ptr<AnalysisOutput> output;
-    std::atomic<bool> overviewReady { false }, sectionsReady { false };
+    std::atomic<bool> overviewReady { false };
 
 private:
     juce::AudioFormatManager& formats;
@@ -271,7 +268,6 @@ void KitnapAudioProcessor::startAnalysis (const juce::File& file, std::array<int
     kit.message = {};
     kit.hits.clear();
     kit.overview.clear();
-    kit.scanned.clear();
 
     if (! DrumSeparator::isAvailable())
     {
@@ -294,11 +290,6 @@ void KitnapAudioProcessor::timerCallback()
     {
         kit.overview = job->output->overview;
         kit.sourceLengthSeconds = job->output->lengthSeconds;
-        sendChangeMessage();
-    }
-    if (job != nullptr && job->sectionsReady.load() && kit.scanned.empty() && job->output != nullptr)
-    {
-        kit.scanned = job->output->scanned;
         sendChangeMessage();
     }
 
@@ -334,7 +325,6 @@ void KitnapAudioProcessor::applyAnalysis (std::unique_ptr<AnalysisOutput> output
     kit.hitSampleRate = output->analysisSampleRate;
     kit.overview = std::move (output->overview);
     kit.sourceLengthSeconds = output->lengthSeconds;
-    kit.scanned = std::move (output->scanned);
 
     int found = 0;
     for (int pad = 0; pad < numDrumClasses; ++pad)
@@ -437,10 +427,6 @@ void KitnapAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
     kitTree.setProperty ("message", kit.message, nullptr);
     kitTree.setProperty ("hitRate", kit.hitSampleRate, nullptr);
     kitTree.setProperty ("length", kit.sourceLengthSeconds, nullptr);
-    juce::StringArray scanned;
-    for (auto& r : kit.scanned)
-        scanned.add (juce::String (r.getStart(), 3) + " " + juce::String (r.getEnd(), 3));
-    kitTree.setProperty ("scanned", scanned.joinIntoString (" "), nullptr);
 
     if (! kit.overview.empty())
         kitTree.setProperty ("overview", juce::MemoryBlock (kit.overview.data(), kit.overview.size() * sizeof (float)).toBase64Encoding(), nullptr);
@@ -531,10 +517,6 @@ void KitnapAudioProcessor::setStateInformation (const void* data, int sizeInByte
         kit.message = kitTree.getProperty ("message").toString();
         kit.hitSampleRate = kitTree.getProperty ("hitRate", 44100.0);
         kit.sourceLengthSeconds = kitTree.getProperty ("length", 0.0);
-        kit.scanned.clear();
-        const auto scanned = juce::StringArray::fromTokens (kitTree.getProperty ("scanned").toString(), true);
-        for (int i = 0; i + 1 < scanned.size(); i += 2)
-            kit.scanned.push_back ({ scanned[i].getDoubleValue(), scanned[i + 1].getDoubleValue() });
 
         kit.overview.clear();
         juce::MemoryBlock block;

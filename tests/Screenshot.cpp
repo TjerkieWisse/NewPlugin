@@ -1,4 +1,4 @@
-// Renders the editor to PNGs: empty, mid-analysis and with a finished kit.
+// Renders the editor to PNGs: empty, mid-analysis, with a finished kit (pads just hit) and at rest.
 // Usage: KitnapScreenshot <audio-file> <output-folder>
 
 #include "PluginProcessor.h"
@@ -73,6 +73,8 @@ int main (int argc, char** argv)
               << midiBuffer.getMagnitude (100, 412) << " after\n";
     pump (60);
     snap (*editor, out.getChildFile ("3-kit.png"));
+    pump (1500); // pads back at rest
+    snap (*editor, out.getChildFile ("4-kit-rest.png"));
 
     // Round-trip the project state into a fresh instance.
     juce::MemoryBlock state;

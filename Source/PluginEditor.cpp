@@ -6,34 +6,40 @@ using namespace kitnap;
 //==============================================================================
 KitnapLookAndFeel::KitnapLookAndFeel()
 {
-    setColour (juce::TextButton::textColourOffId, theme::text);
-    setColour (juce::TextButton::textColourOnId, theme::text);
-    setColour (juce::Slider::textBoxTextColourId, theme::textDim);
+    setColour (juce::TextButton::textColourOffId, theme::ink);
+    setColour (juce::TextButton::textColourOnId, theme::ink);
+    setColour (juce::Slider::textBoxTextColourId, theme::inkDim);
     setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
     setColour (juce::TooltipWindow::backgroundColourId, theme::panel);
+    setColour (juce::TooltipWindow::textColourId, theme::ink);
+    setColour (juce::TooltipWindow::outlineColourId, theme::ink);
+    setColour (juce::BubbleComponent::backgroundColourId, theme::panel);
+    setColour (juce::BubbleComponent::outlineColourId, theme::ink);
 }
 
+// Outlined buttons; the primary one is solid black with white text.
 void KitnapLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& button, const juce::Colour&,
                                               bool highlighted, bool down)
 {
-    auto r = button.getLocalBounds().toFloat().reduced (1.0f);
+    auto r = button.getLocalBounds().toFloat().reduced (theme::outline / 2.0f);
     const bool primary = button.getProperties().getWithDefault ("primary", false);
+    const float alpha = button.isEnabled() ? 1.0f : 0.35f;
 
-    const auto base = primary ? theme::accent : theme::panel;
-
-    g.setColour (base.withMultipliedBrightness (down ? 0.8f : highlighted ? 1.15f : 1.0f)
-                     .withAlpha (button.isEnabled() ? 1.0f : 0.4f));
-    g.fillRoundedRectangle (r, r.getHeight() / 2.0f);
-    if (! primary)
-    {
-        g.setColour (theme::panelEdge.brighter (highlighted ? 0.4f : 0.0f));
-        g.drawRoundedRectangle (r, r.getHeight() / 2.0f, 1.0f);
-    }
+    if (primary)
+        g.setColour (theme::ink.withAlpha (alpha * (down ? 0.75f : highlighted ? 0.85f : 1.0f)));
+    else
+        g.setColour (theme::ink.withAlpha (down ? 0.12f : highlighted ? 0.06f : 0.0f));
+    g.fillRoundedRectangle (r, theme::radius * 0.75f);
+    g.setColour (theme::ink.withAlpha (alpha));
+    g.drawRoundedRectangle (r, theme::radius * 0.75f, theme::outline);
 }
 
-juce::Font KitnapLookAndFeel::getTextButtonFont (juce::TextButton&, int)
+void KitnapLookAndFeel::drawButtonText (juce::Graphics& g, juce::TextButton& button, bool, bool)
 {
-    return theme::font (13.0f, true);
+    const bool primary = button.getProperties().getWithDefault ("primary", false);
+    g.setColour ((primary ? theme::panel : theme::ink).withAlpha (button.isEnabled() ? 1.0f : 0.35f));
+    g.setFont (theme::display (10.5f));
+    g.drawText (button.getButtonText(), button.getLocalBounds(), juce::Justification::centred);
 }
 
 void KitnapLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w, int h, float pos,
@@ -43,29 +49,26 @@ void KitnapLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w
     const float size = std::min (r.getWidth(), r.getHeight());
     r = r.withSizeKeepingCentre (size, size);
     const auto c = r.getCentre();
-    const float radius = size / 2.0f;
+    const float arcRadius = size / 2.0f - 1.5f;
     const float angle = start + pos * (end - start);
 
     juce::Path track, value;
-    track.addCentredArc (c.x, c.y, radius - 2.0f, radius - 2.0f, 0.0f, start, end, true);
-    value.addCentredArc (c.x, c.y, radius - 2.0f, radius - 2.0f, 0.0f, start, angle, true);
-    g.setColour (theme::panelEdge);
-    g.strokePath (track, juce::PathStrokeType (3.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-    g.setColour (theme::accent);
-    g.strokePath (value, juce::PathStrokeType (3.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    track.addCentredArc (c.x, c.y, arcRadius, arcRadius, 0.0f, start, end, true);
+    value.addCentredArc (c.x, c.y, arcRadius, arcRadius, 0.0f, start, angle, true);
+    g.setColour (theme::line);
+    g.strokePath (track, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    g.setColour (theme::ink);
+    g.strokePath (value, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
-    g.setColour (theme::panel);
-    g.fillEllipse (r.reduced (7.0f));
     juce::Path pointer;
-    pointer.addRoundedRectangle (-1.5f, -(radius - 9.0f), 3.0f, radius * 0.45f, 1.5f);
-    g.setColour (theme::text);
+    pointer.addRoundedRectangle (-1.0f, -(arcRadius - 6.0f), 2.0f, arcRadius * 0.5f, 1.0f);
     g.fillPath (pointer, juce::AffineTransform::rotation (angle).translated (c.x, c.y));
 }
 
 //==============================================================================
 KitnapAudioProcessorEditor::KitnapAudioProcessorEditor (KitnapAudioProcessor& p)
     : AudioProcessorEditor (&p), processor (p), waveform (p),
-      volumeAttachment (p.apvts, "volume", volume)
+      volumeAttachment (p.apvts, "volume", volume), logo (theme::logo())
 {
     setLookAndFeel (&lookAndFeel);
 
@@ -110,30 +113,32 @@ KitnapAudioProcessorEditor::~KitnapAudioProcessorEditor()
 
 void KitnapAudioProcessorEditor::paint (juce::Graphics& g)
 {
-    juce::ColourGradient bg (theme::backgroundTop, 0.0f, 0.0f, theme::background, 0.0f, (float) getHeight(), false);
-    g.setGradientFill (bg);
-    g.fillAll();
+    g.fillAll (theme::background);
 
-    // Logo
+    // 40V FORTYVOLTS  |  KITNAP  steal the drum kit from any track
     auto header = getLocalBounds().reduced (24, 0).removeFromTop (80).toFloat();
-    juce::GlyphArrangement logo;
-    logo.addLineOfText (theme::font (30.0f, true).withExtraKerningFactor (0.12f), "KITNAP", header.getX(), header.getCentreY() + 10.0f);
-    juce::Path logoPath;
-    logo.createPath (logoPath);
-    const auto logoBounds = logoPath.getBounds();
-    juce::ColourGradient logoGradient (theme::forClass (DrumClass::kick), logoBounds.getX(), 0.0f,
-                                       theme::forClass (DrumClass::snare), logoBounds.getRight(), 0.0f, false);
-    g.setGradientFill (logoGradient);
-    g.fillPath (logoPath);
+    const auto logoArea = header.withSizeKeepingCentre (header.getWidth(), 22.0f).withWidth (174.0f);
+    if (logo != nullptr)
+        logo->drawWithin (g, logoArea, juce::RectanglePlacement::xLeft | juce::RectanglePlacement::yMid, 1.0f);
 
-    g.setColour (theme::textDim);
-    g.setFont (theme::font (14.0f));
-    g.setFont (theme::font (11.0f, true));
-    g.drawText ("VOL", volume.getBounds().translated (-38, 0).withWidth (34), juce::Justification::centredRight);
+    const float divider = logoArea.getRight() + 18.0f;
+    g.setColour (theme::ink);
+    g.fillRect (juce::Rectangle<float> (divider, header.getCentreY() - 11.0f, theme::outline, 22.0f));
 
-    g.setFont (theme::font (14.0f));
-    g.drawText ("steal the drum kit from any track", juce::Rectangle<float> (logoBounds.getRight() + 16.0f, header.getY(), 300.0f, header.getHeight()).translated (0.0f, 2.0f),
+    g.setFont (theme::display (13.0f));
+    const juce::String name ("KITNAP");
+    const float nameX = divider + 18.0f;
+    const float nameWidth = juce::GlyphArrangement::getStringWidth (g.getCurrentFont(), name);
+    g.drawText (name, juce::Rectangle<float> (nameX, header.getY(), nameWidth + 4.0f, header.getHeight()),
                 juce::Justification::centredLeft);
+
+    g.setColour (theme::inkDim);
+    g.setFont (theme::font (13.0f));
+    g.drawText ("steal the drum kit from any track", juce::Rectangle<float> (nameX + nameWidth + 14.0f, header.getY(), 260.0f, header.getHeight()),
+                juce::Justification::centredLeft);
+
+    g.setFont (theme::display (9.0f));
+    g.drawText ("VOL", volume.getBounds().translated (-38, 0).withWidth (34), juce::Justification::centredRight);
 }
 
 void KitnapAudioProcessorEditor::resized()
@@ -141,12 +146,12 @@ void KitnapAudioProcessorEditor::resized()
     auto area = getLocalBounds().reduced (24, 0);
     auto header = area.removeFromTop (80);
 
-    auto controls = header.withSizeKeepingCentre (header.getWidth(), 40);
-    exportButton.setBounds (controls.removeFromRight (130));
+    auto controls = header.withSizeKeepingCentre (header.getWidth(), 36);
+    exportButton.setBounds (controls.removeFromRight (128));
     controls.removeFromRight (10);
-    loadButton.setBounds (controls.removeFromRight (90));
-    controls.removeFromRight (14);
-    volume.setBounds (controls.removeFromRight (40));
+    loadButton.setBounds (controls.removeFromRight (84));
+    controls.removeFromRight (16);
+    volume.setBounds (controls.removeFromRight (36));
 
     waveform.setBounds (area.removeFromTop (210));
     area.removeFromTop (18);

@@ -3,8 +3,8 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "PluginProcessor.h"
 
-// The big strip at the top: a drop zone when empty, a scanning animation while analysing,
-// and the song's waveform with every detected hit lighting up in its drum colour when done.
+// The big strip at the top: a drop zone when empty, a scanner sweeping through the song's waveform
+// while analysing, and the waveform in black when the kit is ready.
 class WaveformView : public juce::Component
 {
 public:
@@ -22,13 +22,10 @@ public:
 
 private:
     void paintEmpty (juce::Graphics&, juce::Rectangle<float> area);
-    void paintWaveform (juce::Graphics&, juce::Rectangle<float> area, float brightness);
-    void paintHits (juce::Graphics&, juce::Rectangle<float> area);
-    void paintSections (juce::Graphics&, juce::Rectangle<float> area);
-    float songFraction (float progress) const;
+    void paintWaveform (juce::Graphics&, juce::Rectangle<float> area, juce::Colour);
 
     KitnapAudioProcessor& processor;
-    double time = 0.0, revealStart = -10.0;
+    double time = 0.0;
     float shownProgress = 0.0f;
     bool dragHover = false;
     KitState::Status lastStatus = KitState::Status::empty;

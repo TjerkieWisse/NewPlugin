@@ -94,6 +94,13 @@ endfunction()
 target_compile_definitions(KITNAP PUBLIC ${KITNAP_DEFINITIONS})
 kitnap_use_ai(KITNAP "")
 
+# Fonts and the FortyVolts logo, compiled into the binary (BinaryData.h).
+juce_add_binary_data(KitnapAssets SOURCES
+    Resources/fonts/Michroma-Regular.ttf
+    Resources/fonts/IBMPlexSans-Regular.ttf
+    Resources/fonts/IBMPlexSans-Medium.ttf
+    Resources/logo/fortyvolts-lockup.svg)
+
 # The runtime goes into Contents/Resources of every bundle, or Resources/ next to the binary.
 foreach(format IN LISTS KITNAP_FORMATS)
     set(format_target KITNAP_${format})
@@ -106,6 +113,7 @@ endforeach()
 
 target_link_libraries(KITNAP
     PRIVATE
+        KitnapAssets
         juce::juce_audio_utils
         juce::juce_dsp
     PUBLIC
@@ -148,6 +156,6 @@ if(KITNAP_BUILD_SCREENSHOT)
     kitnap_use_ai(KitnapScreenshot "$<TARGET_FILE_DIR:KitnapScreenshot>/Resources" WITH_MODELS)
     target_compile_definitions(KitnapScreenshot PRIVATE ${KITNAP_DEFINITIONS} JucePlugin_Name="KITNAP"
         JUCE_STANDALONE_APPLICATION=1 JUCE_MODAL_LOOPS_PERMITTED=1)
-    target_link_libraries(KitnapScreenshot PRIVATE juce::juce_audio_utils juce::juce_dsp
+    target_link_libraries(KitnapScreenshot PRIVATE KitnapAssets juce::juce_audio_utils juce::juce_dsp
         PUBLIC juce::juce_recommended_config_flags)
 endif()

@@ -10,7 +10,7 @@ class KitnapLookAndFeel : public juce::LookAndFeel_V4
 public:
     KitnapLookAndFeel();
     void drawButtonBackground (juce::Graphics&, juce::Button&, const juce::Colour&, bool highlighted, bool down) override;
-    juce::Font getTextButtonFont (juce::TextButton&, int) override;
+    void drawButtonText (juce::Graphics&, juce::TextButton&, bool highlighted, bool down) override;
     void drawRotarySlider (juce::Graphics&, int x, int y, int w, int h, float pos, float start, float end, juce::Slider&) override;
 };
 
@@ -49,6 +49,7 @@ private:
     juce::Slider volume;
     juce::AudioProcessorValueTreeState::SliderAttachment volumeAttachment;
     std::unique_ptr<juce::FileChooser> chooser;
+    std::unique_ptr<juce::Drawable> logo;
     double lastTick = 0.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (KitnapAudioProcessorEditor)

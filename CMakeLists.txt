@@ -42,7 +42,7 @@ if(UNIX AND NOT APPLE)
 endif()
 
 juce_add_plugin(KITNAP
-    COMPANY_NAME "Kitnap Audio"
+    COMPANY_NAME "FortyVolts"
     BUNDLE_ID "com.kitnapaudio.kitnap"
     PLUGIN_MANUFACTURER_CODE Ktnp
     PLUGIN_CODE Ktn1

@@ -11,6 +11,7 @@ public:
 
     void setSound (kitnap::SamplePtr sample, int variation, int variationCount);
     void setActivity (float level);
+    void setPlaceholder (const juce::String& text) { if (text != placeholder) { placeholder = text; repaint(); } }
 
     void paint (juce::Graphics&) override;
     void mouseDown (const juce::MouseEvent&) override;
@@ -33,4 +34,5 @@ private:
     float activity = 0.0f;
     bool hover = false, dragStarted = false;
     juce::Path waveform;
+    juce::String placeholder; // shown when the pad has no sound
 };

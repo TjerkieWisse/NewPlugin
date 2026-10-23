@@ -29,14 +29,15 @@ void PadComponent::setActivity (float level)
     }
 }
 
+// The "‹ 1/3 ›" picker at the right edge of the row.
 juce::Rectangle<float> PadComponent::previousArea() const
 {
-    return getLocalBounds().toFloat().removeFromBottom (34.0f).removeFromRight (96.0f).removeFromLeft (30.0f).translated (-10.0f, -6.0f);
+    return { (float) getWidth() - 74.0f, (float) getHeight() / 2.0f - 16.0f, 18.0f, 32.0f };
 }
 
 juce::Rectangle<float> PadComponent::nextArea() const
 {
-    return getLocalBounds().toFloat().removeFromBottom (34.0f).removeFromRight (40.0f).translated (-10.0f, -6.0f);
+    return { (float) getWidth() - 36.0f, (float) getHeight() / 2.0f - 16.0f, 18.0f, 32.0f };
 }
 
 void PadComponent::rebuildWaveform()
@@ -67,77 +68,89 @@ void PadComponent::rebuildWaveform()
 
 void PadComponent::paint (juce::Graphics& g)
 {
-    auto area = getLocalBounds().toFloat().reduced (theme::outline / 2.0f);
+    const auto bounds = getLocalBounds().toFloat();
     const bool hasSound = sample != nullptr;
     const float glow = hasSound ? juce::jlimit (0.0f, 1.0f, activity) : 0.0f;
+    const float mid = bounds.getHeight() / 2.0f;
 
-    // White pad that flashes black when it's hit; the ink flips to white with it.
-    const auto ground = theme::panel.interpolatedWith (theme::ink, glow);
-    const auto ink = theme::ink.interpolatedWith (theme::panel, glow);
-    const auto dim = theme::inkDim.interpolatedWith (theme::panel.withAlpha (0.7f), glow);
-    g.setColour (ground);
-    g.fillRoundedRectangle (area, theme::radius);
-    g.setColour (hasSound ? theme::ink : theme::ink.withAlpha (0.25f));
-    g.drawRoundedRectangle (area, theme::radius, hover && hasSound ? theme::outline * 2.0f : theme::outline);
+    // White row; while its sound plays it turns pale blue and its play button and shape go blue.
+    g.setColour (theme::card.interpolatedWith (theme::activeRow, glow));
+    g.fillRoundedRectangle (bounds, theme::rowRadius);
+    const auto edge = hover && hasSound ? juce::Colour (0xffd9d9d9) : theme::border;
+    g.setColour (edge.interpolatedWith (theme::activeBorder, glow));
+    g.drawRoundedRectangle (bounds.reduced (0.5f), theme::rowRadius, 1.0f);
 
-    auto content = area.reduced (16.0f, 14.0f);
-    auto header = content.removeFromTop (18.0f);
+    // Play button, with a ring that spreads out from it as the hit fades.
+    const auto play = juce::Rectangle<float> (18.0f, mid - 17.0f, 34.0f, 34.0f);
+    if (glow > 0.01f)
+    {
+        g.setColour (theme::accent.withAlpha (0.45f * glow));
+        g.drawEllipse (play.expanded (10.0f * (1.0f - glow)), 1.5f + 3.0f * glow);
+    }
+    g.setColour (theme::card.interpolatedWith (theme::accent, glow));
+    g.fillEllipse (play);
+    g.setColour (juce::Colour (0xffe2e2e2).interpolatedWith (theme::accent, glow));
+    g.drawEllipse (play.reduced (0.5f), 1.0f);
+    juce::Path triangle;
+    const auto c = play.getCentre();
+    triangle.addTriangle (c.x - 2.5f, c.y - 4.5f, c.x + 5.0f, c.y, c.x - 2.5f, c.y + 4.5f);
+    g.setColour ((hasSound ? theme::ink : theme::inkDim.withAlpha (0.5f)).interpolatedWith (theme::card, glow));
+    g.fillPath (triangle);
 
-    g.setFont (theme::display (12.0f));
-    g.setColour (hasSound ? ink : theme::inkDim);
-    g.drawText (juce::String (drumClassName ((DrumClass) pad)).toUpperCase(), header, juce::Justification::centredLeft);
-
-    g.setFont (theme::font (12.0f));
-    g.setColour (dim);
-    g.drawText (juce::MidiMessage::getMidiNoteName (KitSampler::noteForPad (pad), true, true, 3), header,
-                juce::Justification::centredRight);
-
-    auto footer = content.removeFromBottom (22.0f);
-    content.removeFromBottom (6.0f);
+    // Name and note.
+    g.setColour (hasSound ? theme::ink : theme::inkDim);
+    g.setFont (theme::font (16.0f, theme::Weight::medium));
+    const juce::String name (drumClassName ((DrumClass) pad));
+    g.drawText (name.substring (0, 1) + name.substring (1).toLowerCase(), juce::Rectangle<float> (68.0f, mid - 22.0f, 100.0f, 22.0f), juce::Justification::centredLeft);
+    g.setColour (theme::inkDim);
+    g.setFont (theme::mono (11.0f));
+    const auto note = juce::MidiMessage::getMidiNoteName (KitSampler::noteForPad (pad), true, true, 3);
+    g.drawText (hasSound ? note + "  " + theme::dot() + "  drag me" : note, juce::Rectangle<float> (68.0f, mid + 2.0f, 100.0f, 16.0f),
+                juce::Justification::centredLeft);
 
     if (! hasSound)
     {
-        g.setFont (theme::font (13.0f));
-        g.drawText ("not found yet", content, juce::Justification::centred);
+        g.drawText (placeholder, juce::Rectangle<float> (170.0f, 0.0f, bounds.getWidth() - 188.0f, bounds.getHeight()),
+                    juce::Justification::centredLeft);
         return;
     }
 
-    // Sound shape
-    auto wave = content.reduced (0.0f, 6.0f);
+    // Sound shape.
     auto shape = waveform;
-    shape.applyTransform (juce::AffineTransform::scale (wave.getWidth(), wave.getHeight()).translated (wave.getX(), wave.getY()));
-    g.setColour (ink.withAlpha (0.12f));
+    shape.applyTransform (juce::AffineTransform::scale (170.0f, 46.0f).translated (170.0f, mid - 23.0f));
+    g.setColour (theme::fill.interpolatedWith (theme::accent.withAlpha (0.14f), glow));
     g.fillPath (shape);
-    g.setColour (ink);
-    g.strokePath (shape, juce::PathStrokeType (1.0f));
+    g.setColour (theme::ink.interpolatedWith (theme::accent, glow));
+    g.strokePath (shape, juce::PathStrokeType (1.0f + 0.25f * glow));
 
-    // Footer: how often the sound occurs, and the variation picker.
-    g.setFont (theme::font (12.0f));
-    g.setColour (dim);
-    // The sound is one hit from the song; this says how many of the hits the AI heard sound like it.
-    g.drawText ("heard " + juce::String (sample->hitsStacked) + "x  " + theme::dot() + "  drag me", footer, juce::Justification::centredLeft);
+    // How many of the song's hits sound like this one.
+    g.setColour (theme::ink);
+    g.setFont (theme::font (24.0f, theme::Weight::light));
+    g.drawText (juce::String (sample->hitsStacked), juce::Rectangle<float> (360.0f, mid - 28.0f, 40.0f, 30.0f), juce::Justification::centredLeft);
+    g.setColour (theme::inkDim);
+    g.setFont (theme::mono (11.0f));
+    g.drawText (sample->hitsStacked == 1 ? "hit" : "hits", juce::Rectangle<float> (360.0f, mid + 5.0f, 40.0f, 16.0f), juce::Justification::centredLeft);
 
     if (variationCount > 1)
     {
-        g.setColour (ink);
-        g.setFont (theme::font (12.0f, true));
+        g.setColour (theme::ink);
+        g.setFont (theme::mono (12.0f));
         g.drawText (juce::String (variation + 1) + "/" + juce::String (variationCount),
-                    footer.removeFromRight (86.0f).withTrimmedLeft (26.0f).withTrimmedRight (30.0f), juce::Justification::centred);
+                    juce::Rectangle<float> (previousArea().getRight(), mid - 8.0f, nextArea().getX() - previousArea().getRight(), 16.0f),
+                    juce::Justification::centred);
 
-        auto drawArrow = [&] (juce::Rectangle<float> r, bool left)
+        auto chevron = [&] (juce::Rectangle<float> r, bool left)
         {
-            r = r.withSizeKeepingCentre (22.0f, 22.0f);
-            g.drawRoundedRectangle (r.reduced (0.5f), 5.0f, 1.0f);
+            const auto p0 = r.getCentre();
+            const float d = left ? 1.0f : -1.0f;
             juce::Path p;
-            const auto c = r.getCentre();
-            const float d = left ? -1.0f : 1.0f;
-            p.startNewSubPath (c.x - 2.0f * d, c.y - 4.5f);
-            p.lineTo (c.x + 2.5f * d, c.y);
-            p.lineTo (c.x - 2.0f * d, c.y + 4.5f);
-            g.strokePath (p, juce::PathStrokeType (1.5f));
+            p.startNewSubPath (p0.x + 2.0f * d, p0.y - 4.0f);
+            p.lineTo (p0.x - 2.0f * d, p0.y);
+            p.lineTo (p0.x + 2.0f * d, p0.y + 4.0f);
+            g.strokePath (p, juce::PathStrokeType (1.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
         };
-        drawArrow (previousArea(), true);
-        drawArrow (nextArea(), false);
+        chevron (previousArea(), true);
+        chevron (nextArea(), false);
     }
 }
 

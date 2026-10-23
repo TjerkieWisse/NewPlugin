@@ -66,8 +66,7 @@ target_sources(KITNAP PRIVATE
     Source/separation/DrumSeparator.cpp
     Source/engine/KitSampler.cpp
     Source/ui/WaveformView.cpp
-    Source/ui/PadComponent.cpp
-    Source/ui/FilmLook.cpp)
+    Source/ui/PadComponent.cpp)
 
 target_include_directories(KITNAP PRIVATE Source)
 
@@ -98,8 +97,10 @@ kitnap_use_ai(KITNAP "")
 # Fonts and the FortyVolts logo, compiled into the binary (BinaryData.h).
 juce_add_binary_data(KitnapAssets SOURCES
     Resources/fonts/Michroma-Regular.ttf
-    Resources/fonts/IBMPlexSans-Regular.ttf
-    Resources/fonts/IBMPlexSans-Medium.ttf
+    Resources/fonts/Geist-Light.ttf
+    Resources/fonts/Geist-Regular.ttf
+    Resources/fonts/Geist-Medium.ttf
+    Resources/fonts/GeistMono-Regular.ttf
     Resources/logo/fortyvolts-lockup.svg)
 
 # The runtime goes into Contents/Resources of every bundle, or Resources/ next to the binary.
@@ -152,8 +153,7 @@ if(KITNAP_BUILD_SCREENSHOT)
         Source/separation/DrumSeparator.cpp
         Source/engine/KitSampler.cpp
         Source/ui/WaveformView.cpp
-        Source/ui/PadComponent.cpp
-        Source/ui/FilmLook.cpp)
+        Source/ui/PadComponent.cpp)
     target_include_directories(KitnapScreenshot PRIVATE Source)
     kitnap_use_ai(KitnapScreenshot "$<TARGET_FILE_DIR:KitnapScreenshot>/Resources" WITH_MODELS)
     target_compile_definitions(KitnapScreenshot PRIVATE ${KITNAP_DEFINITIONS} JucePlugin_Name="KITNAP"

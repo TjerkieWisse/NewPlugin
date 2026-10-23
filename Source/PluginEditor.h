@@ -4,7 +4,6 @@
 #include "PluginProcessor.h"
 #include "ui/PadComponent.h"
 #include "ui/WaveformView.h"
-#include "ui/FilmLook.h"
 
 class KitnapLookAndFeel : public juce::LookAndFeel_V4
 {
@@ -12,7 +11,9 @@ public:
     KitnapLookAndFeel();
     void drawButtonBackground (juce::Graphics&, juce::Button&, const juce::Colour&, bool highlighted, bool down) override;
     void drawButtonText (juce::Graphics&, juce::TextButton&, bool highlighted, bool down) override;
-    void drawRotarySlider (juce::Graphics&, int x, int y, int w, int h, float pos, float start, float end, juce::Slider&) override;
+    void drawLinearSlider (juce::Graphics&, int x, int y, int w, int h, float pos, float min, float max,
+                           juce::Slider::SliderStyle, juce::Slider&) override;
+    int getSliderThumbRadius (juce::Slider&) override { return 9; }
 };
 
 class KitnapAudioProcessorEditor : public juce::AudioProcessorEditor,
@@ -39,29 +40,21 @@ private:
     void browseForFile();
     void exportKit();
     void dragPadOut (int pad);
-    void paintSurface (juce::Graphics&);
-    void setFilm (bool on);
-
-    // Everything the editor shows, drawn into a cached picture that the film look grades.
-    struct Surface : public juce::Component
-    {
-        std::function<void (juce::Graphics&)> onPaint;
-        void paint (juce::Graphics& g) override { if (onPaint) onPaint (g); }
-    };
+    void paintBackground (juce::Graphics&);
 
     KitnapAudioProcessor& processor;
     KitnapLookAndFeel lookAndFeel;
-    FilmOverlay film;
-    Surface surface;
 
     WaveformView waveform;
     std::vector<std::unique_ptr<PadComponent>> pads;
-    juce::TextButton loadButton { "LOAD" }, exportButton { "EXPORT KIT" }, filmButton { "FILM" };
+    juce::TextButton loadButton { "Load" }, exportButton { "Export kit" };
     juce::TooltipWindow tooltips { this };
     juce::Slider volume;
     juce::AudioProcessorValueTreeState::SliderAttachment volumeAttachment;
     std::unique_ptr<juce::FileChooser> chooser;
     std::unique_ptr<juce::Drawable> logo;
+    juce::Image background;
+    float backgroundScale = 0.0f;
     double lastTick = 0.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (KitnapAudioProcessorEditor)

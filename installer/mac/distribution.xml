@@ -22,7 +22,7 @@
     <choice id="app" title="Standalone app" description="Use KITNAP without a DAW.">
         <pkg-ref id="com.kitnapaudio.kitnap.app"/>
     </choice>
-    <choice id="models" title="AI models" description="Pulls the drums out of a song and splits them into kick, snare, toms, hi-hat and cymbals (650 MB). KITNAP needs them to make a kit.">
+    <choice id="models" title="AI models" description="Pulls the drums out of a song and splits them into kick, snare, toms, hi-hat and cymbals (620 MB). KITNAP needs them to make a kit.">
         <pkg-ref id="com.kitnapaudio.kitnap.models"/>
     </choice>
 

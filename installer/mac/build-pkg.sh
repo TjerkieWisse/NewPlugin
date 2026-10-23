@@ -1,6 +1,7 @@
 #!/bin/bash
 # Builds the macOS installer: KITNAP-<version>-macOS.pkg with VST3, AU, the standalone app and the AI
-# models as separate, optional parts.
+# models as separate, optional parts. The AI runtime goes in once, with the models, instead of inside
+# each plugin: all of them find it in the shared folder.
 #
 # Usage: installer/mac/build-pkg.sh <version> [artefacts-folder] [output-folder] [ai-folder]
 set -euo pipefail
@@ -21,6 +22,12 @@ component() {
     local root="$work/$id-root"
     mkdir -p "$root"
     cp -R "$bundle" "$root/"
+    local copy="$root/$(basename "$bundle")"
+    if [ -d "$copy/Contents/Resources" ]; then
+        rm -f "$copy"/Contents/Resources/libonnxruntime*.dylib
+        # A bundle sealed with its resources is signed again without the runtime.
+        if [ -d "$copy/Contents/_CodeSignature" ]; then codesign --force --sign - "$copy"; fi
+    fi
 
     # Stop the installer from "relocating" the bundle to wherever an older copy happens to live.
     pkgbuild --analyze --root "$root" "$work/$id.plist"
@@ -43,9 +50,10 @@ component vst3 "$artefacts/VST3/KITNAP.vst3" "/Library/Audio/Plug-Ins/VST3"
 component au "$artefacts/AU/KITNAP.component" "/Library/Audio/Plug-Ins/Components" "$here/au-scripts"
 component app "$artefacts/Standalone/KITNAP.app" "/Applications"
 
-# The AI models are shared by the plugins and the app: /Library/Application Support/KITNAP.
+# The AI models and runtime are shared by the plugins and the app: /Library/Application Support/KITNAP.
 mkdir -p "$work/model-files/KITNAP"
 cp "$ai/kitnap_drums_sw.onnx" "$ai/kitnap_drumsep5.onnx" "$work/model-files/KITNAP/"
+cp "$artefacts"/VST3/KITNAP.vst3/Contents/Resources/libonnxruntime*.dylib "$work/model-files/KITNAP/"
 component models "$work/model-files/KITNAP" "/Library/Application Support"
 
 sed "s/@VERSION@/$version/g" "$here/distribution.xml" > "$work/distribution.xml"

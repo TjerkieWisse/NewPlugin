@@ -110,6 +110,9 @@ jobs:
           staging="KITNAP-$KITNAP_VERSION-Linux"
           mkdir -p "$staging" build/installer
           cp -R build/KITNAP_artefacts/Release/VST3 build/KITNAP_artefacts/Release/LV2 build/KITNAP_artefacts/Release/Standalone "$staging/"
+          # The runtime goes in once; install.sh puts it next to the models.
+          cp build/KITNAP_artefacts/Release/Standalone/Resources/libonnxruntime.so.* "$staging/"
+          find "$staging/VST3" "$staging/LV2" "$staging/Standalone" -name 'libonnxruntime.so.*' -delete
           cp installer/linux/install.sh build/kitnap-ai/kitnap_drums_sw.onnx build/kitnap-ai/kitnap_drumsep5.onnx "$staging/"
           tar czf "build/installer/$staging.tar.gz" "$staging"
 

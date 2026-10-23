@@ -9,6 +9,8 @@
 # attention over time needs memory that grows with the square of the chunk length (over 14 GB at
 # 13 s, about 3 GB at 4 s); at 4 s the result is within -22 dB of the 13 s one.
 #
+# The weights are stored as 16-bit floats, which holds them exactly (see compact_onnx.py).
+#
 # Usage: python export_sw.py <bs_roformer_sw.safetensors> <out.onnx>
 # Needs: torch, onnx, onnxruntime, safetensors, numpy, and BS-RoFormer==0.4.1 (later versions of
 # that package changed the architecture and can't load these weights).
@@ -105,6 +107,13 @@ def main():
     with torch.no_grad():
         torch.onnx.export(wrapper, (spec,), out, input_names=['spectrogram'], output_names=['drums'],
                           opset_version=17, dynamo=False)
+
+    # The weights are 16-bit values stored as 32-bit floats: store them at half the size (lossless).
+    import onnx
+    from compact_onnx import compact
+    exported = onnx.load(out)
+    compact(exported)
+    onnx.save(exported, out)
 
     # Check against the original model's own drums output (with its own STFT and inverse STFT).
     import onnxruntime

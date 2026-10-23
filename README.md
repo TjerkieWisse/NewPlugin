@@ -70,7 +70,7 @@ Every push builds the Mac installer and plugins (Windows and Linux are switched 
 
 ### The AI files
 
-ONNX Runtime ships inside the plugin (`Contents/Resources` in the bundle, or `Resources/` next to the binary). The models (`kitnap_drums_sw.onnx`, 210 MB, and `kitnap_drumsep5.onnx`, 440 MB) are installed once in a shared folder: `C:\ProgramData\KITNAP` on Windows, `/Library/Application Support/KITNAP` on macOS, `~/.config/KITNAP` on Linux. KITNAP loads the runtime only when needed and never links against it. The separation model is exported with its attention, normalisation and rotary embeddings written out as plain matrix and element-wise operations (the same math), which runs about a third faster on the CPU and lets Core ML take on the whole model. Both models are needed to make a kit: if a file is missing or can't load (e.g. on a very old macOS), loading a track shows why, and kits saved in a project still open and play.
+The models (`kitnap_drums_sw.onnx`, 105 MB, and `kitnap_drumsep5.onnx`, 440 MB) and ONNX Runtime are installed once in a shared folder that the plugins and the app all use: `C:\ProgramData\KITNAP` on Windows, `/Library/Application Support/KITNAP` on macOS, `~/.config/KITNAP` on Linux. (A runtime inside the plugin, in `Contents/Resources` or `Resources/` next to the binary, is used first; self-built plugins have one there.) Every weight of the separation model fits exactly in a 16-bit number, so they're stored as 16-bit (`tools/compact_onnx.py`): half the size, and ONNX Runtime turns them back into exactly the same 32-bit weights when it loads the model. KITNAP loads the runtime only when needed and never links against it. The separation model is exported with its attention, normalisation and rotary embeddings written out as plain matrix and element-wise operations (the same math), which runs about a third faster on the CPU and lets Core ML take on the whole model. Both models are needed to make a kit: if a file is missing or can't load (e.g. on a very old macOS), loading a track shows why, and kits saved in a project still open and play.
 
 The models:
 - **Separation:** BS-RoFormer SW (6 stems: bass, drums, other, vocals, guitar, piano; weights released by jarredou), downloaded from the [mixdown-models](https://github.com/mogonzal/mixdown-models/releases/tag/bs-roformer-sw-v1) mirror (checksum verified) and converted by `tools/export_sw.py`, drums only. Input and output `[1, 2, 1025, 345, 2]` (channel, bin, frame, real/imaginary; 2048-point FFT, hop 512).
@@ -127,6 +127,7 @@ installer/                  Windows (Inno Setup), macOS (pkg) and Linux installe
 cmake/KitnapAI.cmake        downloads ONNX Runtime + models, converts them, bundles the runtime
 tools/export_sw.py          converts the BS-RoFormer SW checkpoint to ONNX
 tools/export_drumsep.py     converts the DrumSep checkpoint to ONNX
+tools/compact_onnx.py       stores weights that fit exactly in 16 bits as 16-bit (lossless)
 ```
 
 ## License note

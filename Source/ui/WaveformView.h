@@ -4,7 +4,7 @@
 #include "PluginProcessor.h"
 
 // The wide card at the top: the song's name and details, how many hits were found, and the song's
-// waveform filled with the flowing aurora, with a soft glow under it and a playhead running across.
+// waveform filled with the flowing aurora, with a soft glow under it.
 // Empty, it's the drop zone; while analysing, the aurora fills the waveform up to the progress.
 class WaveformView : public juce::Component
 {
@@ -23,6 +23,7 @@ public:
 
 private:
     juce::Rectangle<float> waveArea() const;
+    juce::Rectangle<float> progressArea() const;
     void paintWave (juce::Graphics&);
     void paintRuler (juce::Graphics&);
     void buildMasks (float scale);

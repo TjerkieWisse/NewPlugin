@@ -5,7 +5,6 @@ using namespace kitnap;
 
 namespace
 {
-constexpr double playheadSeconds = 10.0; // one pass of the playhead across the song
 constexpr float glowMargin = 40.0f;      // room around the waveform for its glow
 constexpr float glowOpacity = 0.35f;
 
@@ -52,6 +51,12 @@ void blur (juce::Image& image, int radius)
 juce::Rectangle<float> WaveformView::waveArea() const
 {
     return { 24.0f, 84.0f, (float) getWidth() - 48.0f, 116.0f };
+}
+
+// The hit count, or the analysis' percentage and step, at the top right.
+juce::Rectangle<float> WaveformView::progressArea() const
+{
+    return { (float) getWidth() - 224.0f, 8.0f, 200.0f, 62.0f };
 }
 
 void WaveformView::kitChanged()
@@ -123,11 +128,14 @@ void WaveformView::tick (double seconds)
     time += seconds;
     shownProgress += 0.15f * (processor.getProgress() - shownProgress);
 
-    // Only the waveform moves (plus the card's edge while a file hovers over it).
+    // Only the waveform moves, plus the percentage while analysing and the card's edge while a file
+    // hovers over it.
     if (dragHover)
         repaint();
     else
         repaint (waveArea().expanded (0.0f, glowMargin).getSmallestIntegerContainer().getIntersection (getLocalBounds().reduced (2)));
+    if (processor.getKit().status == KitState::Status::analysing)
+        repaint (progressArea().getSmallestIntegerContainer());
 }
 
 void WaveformView::mouseUp (const juce::MouseEvent& e)
@@ -198,10 +206,10 @@ void WaveformView::paint (juce::Graphics& g)
     {
         g.setColour (theme::ink);
         g.setFont (theme::font (34.0f, theme::Weight::light));
-        g.drawText (big, juce::Rectangle<float> (w - 224.0f, 8.0f, 200.0f, 42.0f), juce::Justification::centredRight);
+        g.drawText (big, progressArea().withHeight (42.0f), juce::Justification::centredRight);
         g.setColour (theme::inkDim);
         g.setFont (theme::mono (11.0f));
-        g.drawText (small, juce::Rectangle<float> (w - 224.0f, 52.0f, 200.0f, 18.0f), juce::Justification::centredRight);
+        g.drawText (small, progressArea().withTrimmedTop (44.0f), juce::Justification::centredRight);
     }
 
     paintWave (g);
@@ -239,13 +247,6 @@ void WaveformView::paintWave (juce::Graphics& g)
     const float litRight = area.getX() + area.getWidth() * done;
     composeFrame (scale, litRight, analysing ? juce::jmin (1.0f, done * 20.0f) : 1.0f);
     g.drawImage (frame, glowArea);
-
-    // Playhead: runs across the song, or marks how far the analysis is.
-    const float x = analysing ? litRight
-                              : area.getX() + area.getWidth() * (float) std::fmod (time / playheadSeconds, 1.0);
-    g.setColour (theme::ink);
-    g.fillRect (juce::Rectangle<float> (x - 0.5f, area.getY() - 6.0f, 1.0f, area.getHeight() + 12.0f));
-    g.fillEllipse (juce::Rectangle<float> (7.0f, 7.0f).withCentre ({ x, area.getY() - 6.0f }));
 }
 
 // The waveform and its glow in the flowing aurora (up to `litRight`; plain grey after it), blended

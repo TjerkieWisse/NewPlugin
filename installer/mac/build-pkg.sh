@@ -54,7 +54,7 @@ component app "$artefacts/Standalone/KITNAP.app" "/Applications"
 mkdir -p "$work/model-files/KITNAP"
 cp "$ai/kitnap_drums_sw.onnx" "$ai/kitnap_drumsep5.onnx" "$work/model-files/KITNAP/"
 cp "$artefacts"/VST3/KITNAP.vst3/Contents/Resources/libonnxruntime*.dylib "$work/model-files/KITNAP/"
-component models "$work/model-files/KITNAP" "/Library/Application Support"
+component models "$work/model-files/KITNAP" "/Library/Application Support" "$here/models-scripts"
 
 sed "s/@VERSION@/$version/g" "$here/distribution.xml" > "$work/distribution.xml"
 productbuild --distribution "$work/distribution.xml" --resources "$here/resources" \

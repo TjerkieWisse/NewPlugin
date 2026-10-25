@@ -52,6 +52,17 @@ Source: "{#Artefacts}\Standalone\Resources\onnxruntime.dll"; DestDir: "{commonap
 Source: "{#AIFiles}\kitnap_drums_sw.onnx"; DestDir: "{commonappdata}\KITNAP"; Components: ai; Flags: ignoreversion nocompression
 Source: "{#AIFiles}\kitnap_drumsep5.onnx"; DestDir: "{commonappdata}\KITNAP"; Components: ai; Flags: ignoreversion nocompression
 
+[InstallDelete]
+; Models older versions installed, which this one no longer uses.
+Type: files; Name: "{commonappdata}\KITNAP\kitnap_drums.onnx"
+Type: files; Name: "{commonappdata}\KITNAP\kitnap_drumsep.onnx"
+Type: files; Name: "{commoncf64}\VST3\KITNAP.vst3\Contents\Resources\kitnap_drums.onnx"
+Type: files; Name: "{app}\Resources\kitnap_drums.onnx"
+; The runtime older versions put inside the plugin and the app: it would be found before the
+; shared one, and may be an older version.
+Type: files; Name: "{commoncf64}\VST3\KITNAP.vst3\Contents\Resources\onnxruntime.dll"
+Type: files; Name: "{app}\Resources\onnxruntime.dll"
+
 [Icons]
 Name: "{autoprograms}\KITNAP"; Filename: "{app}\KITNAP.exe"; Components: standalone
 

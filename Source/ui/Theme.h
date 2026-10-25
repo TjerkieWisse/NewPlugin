@@ -40,15 +40,14 @@ inline juce::Font display (float height)
     return juce::Font (juce::FontOptions (face).withHeight (height)).withExtraKerningFactor (0.18f);
 }
 
-enum class Weight { light, regular, medium };
+enum class Weight { light, medium };
 
 // Text face.
-inline juce::Font font (float height, Weight weight = Weight::regular)
+inline juce::Font font (float height, Weight weight)
 {
     static auto light = detail::load (BinaryData::GeistLight_ttf, BinaryData::GeistLight_ttfSize);
-    static auto regular = detail::load (BinaryData::GeistRegular_ttf, BinaryData::GeistRegular_ttfSize);
     static auto medium = detail::load (BinaryData::GeistMedium_ttf, BinaryData::GeistMedium_ttfSize);
-    auto face = weight == Weight::light ? light : weight == Weight::medium ? medium : regular;
+    auto face = weight == Weight::light ? light : medium;
     return juce::Font (juce::FontOptions (face).withHeight (height));
 }
 

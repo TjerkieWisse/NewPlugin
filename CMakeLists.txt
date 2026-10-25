@@ -98,7 +98,6 @@ kitnap_use_ai(KITNAP "")
 juce_add_binary_data(KitnapAssets SOURCES
     Resources/fonts/Michroma-Regular.ttf
     Resources/fonts/Geist-Light.ttf
-    Resources/fonts/Geist-Regular.ttf
     Resources/fonts/Geist-Medium.ttf
     Resources/fonts/GeistMono-Regular.ttf
     Resources/logo/fortyvolts-lockup.svg)

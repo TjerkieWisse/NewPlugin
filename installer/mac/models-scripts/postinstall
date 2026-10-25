@@ -1,0 +1,5 @@
+#!/bin/bash
+# Remove the models older versions of KITNAP installed and this one no longer uses.
+cd "/Library/Application Support/KITNAP" 2>/dev/null || exit 0
+rm -f kitnap_drums.onnx kitnap_drumsep.onnx
+exit 0

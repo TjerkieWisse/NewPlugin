@@ -3,7 +3,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "engine/KitSampler.h"
 
-// One drum pad: click to play, arrows to flip through variations, drag it out to get the WAV.
+// One drum pad tile: click to play, arrows to flip through variations, drag it out to get the WAV.
 class PadComponent : public juce::Component
 {
 public:
@@ -24,6 +24,7 @@ public:
     std::function<void()> onDragOut;
 
 private:
+    juce::String pickerText() const;
     juce::Rectangle<float> previousArea() const;
     juce::Rectangle<float> nextArea() const;
     void rebuildWaveform();

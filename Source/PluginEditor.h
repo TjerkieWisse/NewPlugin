@@ -11,9 +11,7 @@ public:
     KitnapLookAndFeel();
     void drawButtonBackground (juce::Graphics&, juce::Button&, const juce::Colour&, bool highlighted, bool down) override;
     void drawButtonText (juce::Graphics&, juce::TextButton&, bool highlighted, bool down) override;
-    void drawLinearSlider (juce::Graphics&, int x, int y, int w, int h, float pos, float min, float max,
-                           juce::Slider::SliderStyle, juce::Slider&) override;
-    int getSliderThumbRadius (juce::Slider&) override { return 9; }
+    void drawRotarySlider (juce::Graphics&, int x, int y, int w, int h, float pos, float start, float end, juce::Slider&) override;
 };
 
 class KitnapAudioProcessorEditor : public juce::AudioProcessorEditor,
@@ -41,6 +39,7 @@ private:
     void exportKit();
     void dragPadOut (int pad);
     void paintBackground (juce::Graphics&);
+    juce::Rectangle<int> volumeTile() const;
 
     KitnapAudioProcessor& processor;
     KitnapLookAndFeel lookAndFeel;

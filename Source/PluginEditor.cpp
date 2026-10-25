@@ -42,28 +42,33 @@ void KitnapLookAndFeel::drawButtonText (juce::Graphics& g, juce::TextButton& but
     g.drawText (button.getButtonText(), button.getLocalBounds(), juce::Justification::centred);
 }
 
-// Thin grey track, black up to the value, and a round white thumb.
-void KitnapLookAndFeel::drawLinearSlider (juce::Graphics& g, int, int y, int, int h, float pos, float, float,
-                                          juce::Slider::SliderStyle, juce::Slider& slider)
+// The volume knob: a grey arc, filled with the aurora up to the value, and the value in the middle.
+void KitnapLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w, int h, float pos,
+                                          float start, float end, juce::Slider& slider)
 {
-    const float width = (float) slider.getWidth();
-    const float mid = (float) y + (float) h / 2.0f;
-    const auto track = juce::Rectangle<float> (0.0f, mid - 2.0f, width, 4.0f);
-    g.setColour (theme::line);
-    g.fillRoundedRectangle (track, 2.0f);
-    g.setColour (theme::ink);
-    g.fillRoundedRectangle (track.withRight (pos), 2.0f);
+    const auto box = juce::Rectangle<float> ((float) x, (float) y, (float) w, (float) h);
+    const auto c = box.getCentre();
+    const float radius = std::min (box.getWidth(), box.getHeight()) / 2.0f - 5.5f;
+    const juce::PathStrokeType stroke (5.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
 
-    const auto thumb = juce::Rectangle<float> (18.0f, 18.0f).withCentre ({ pos, mid });
-    for (int k = 1; k <= 3; ++k) // soft shadow, without a blur
+    juce::Path track, value;
+    track.addCentredArc (c.x, c.y, radius, radius, 0.0f, start, end, true);
+    g.setColour (theme::line);
+    g.strokePath (track, stroke);
+    if (pos > 0.001f)
     {
-        g.setColour (juce::Colours::black.withAlpha (0.035f));
-        g.fillEllipse (thumb.expanded ((float) k).translated (0.0f, 2.0f));
+        value.addCentredArc (c.x, c.y, radius, radius, 0.0f, start, start + pos * (end - start), true);
+        g.setGradientFill (theme::auroraShort (box.getBottomLeft(), box.getTopRight()));
+        g.strokePath (value, stroke);
     }
-    g.setColour (theme::card);
-    g.fillEllipse (thumb);
-    g.setColour (juce::Colour (0xffd9d9d9).darker (slider.isMouseOverOrDragging() ? 0.15f : 0.0f));
-    g.drawEllipse (thumb.reduced (0.5f), 1.0f);
+
+    const double db = slider.getValue();
+    g.setColour (theme::ink);
+    g.setFont (theme::font (24.0f, theme::Weight::light));
+    g.drawText ((db > 0.05 ? "+" : "") + juce::String (db, 1), box.withY (c.y - 18.0f).withHeight (30.0f), juce::Justification::centred);
+    g.setColour (theme::inkDim);
+    g.setFont (theme::mono (11.0f));
+    g.drawText ("dB", box.withY (c.y + 14.0f).withHeight (16.0f), juce::Justification::centred);
 }
 
 //==============================================================================
@@ -92,14 +97,13 @@ KitnapAudioProcessorEditor::KitnapAudioProcessorEditor (KitnapAudioProcessor& p)
     addAndMakeVisible (loadButton);
     addAndMakeVisible (exportButton);
 
-    // The volume slider sits at the bottom of the ring card, which draws its label and value.
-    volume.setSliderStyle (juce::Slider::LinearHorizontal);
+    // The volume knob, in the last tile; drag up or down, double-click to reset.
+    volume.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+    volume.setRotaryParameters (juce::MathConstants<float>::pi * 1.25f, juce::MathConstants<float>::pi * 2.75f, true);
     volume.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
     if (auto* param = processor.apvts.getParameter ("volume"))
         volume.setDoubleClickReturnValue (true, param->convertFrom0to1 (param->getDefaultValue()));
-    volume.onValueChange = [this] { waveform.repaint(); };
-    waveform.addAndMakeVisible (volume);
-    volume.setBounds (WaveformView::volumeSliderArea());
+    addAndMakeVisible (volume);
 
     processor.addChangeListener (this);
     setSize (960, 640);
@@ -117,8 +121,8 @@ KitnapAudioProcessorEditor::~KitnapAudioProcessorEditor()
 
 void KitnapAudioProcessorEditor::paint (juce::Graphics& g)
 {
-    // The ring card repaints every frame, so the blurred glow and shadow behind it are drawn once
-    // into a picture at the screen's pixel density and reused.
+    // The song card repaints every frame, so the shadow behind it is drawn once into a picture at
+    // the screen's pixel density and reused.
     const float scale = g.getInternalContext().getPhysicalPixelScaleFactor();
     if (! background.isValid() || ! juce::approximatelyEqual (backgroundScale, scale))
     {
@@ -135,22 +139,19 @@ void KitnapAudioProcessorEditor::paint (juce::Graphics& g)
 void KitnapAudioProcessorEditor::paintBackground (juce::Graphics& g)
 {
     g.fillAll (theme::background);
-
-    // A soft blue light behind the ring.
-    {
-        juce::Graphics::ScopedSaveState state (g);
-        const juce::Point<float> centre (230.0f, 340.0f);
-        g.addTransform (juce::AffineTransform::scale (1.0f, 420.0f / 520.0f, centre.x, centre.y));
-        g.setGradientFill (juce::ColourGradient (theme::glow, centre, theme::glow.withAlpha (0.0f), centre.translated (520.0f, 0.0f), true));
-        g.fillRect (getLocalBounds().toFloat().expanded ((float) getHeight()));
-    }
-
     theme::paintCard (g, waveform.getBounds().toFloat(), theme::cardRadius);
+
+    // The volume tile around the knob.
+    const auto tile = volumeTile().toFloat();
+    theme::paintCard (g, tile, theme::tileRadius, false);
+    g.setColour (theme::ink);
+    g.setFont (theme::font (14.0f, theme::Weight::medium));
+    g.drawText ("Volume", tile.withTrimmedLeft (18.0f).withY (tile.getY() + 16.0f).withHeight (20.0f), juce::Justification::centredLeft);
 
     // 40V FORTYVOLTS  |  KITNAP
     if (logo != nullptr)
         logo->drawWithin (g, { 28.0f, 30.0f, 158.0f, 20.0f }, juce::RectanglePlacement::xLeft | juce::RectanglePlacement::yMid, 1.0f);
-    g.setColour (juce::Colour (0xffdddddd));
+    g.setColour (juce::Colour (0xffd4d4d4));
     g.fillRect (juce::Rectangle<float> (204.0f, 29.0f, 1.0f, 22.0f));
     g.setColour (theme::ink);
     g.setFont (theme::display (12.0f));
@@ -162,16 +163,17 @@ void KitnapAudioProcessorEditor::resized()
     background = {};
     loadButton.setBounds (728, 22, 84, 36);
     exportButton.setBounds (820, 22, 116, 36);
-    waveform.setBounds (24, 76, 420, 540);
+    waveform.setBounds (24, 76, 912, 236);
 
-    // One row per pad down the right; the last one takes up the rounding.
-    const int top = 76, gap = 12, rows = KitSampler::numPads;
-    const int height = (540 - (rows - 1) * gap) / rows;
-    for (int i = 0; i < rows; ++i)
-    {
-        const int y = top + i * (height + gap);
-        pads[(size_t) i]->setBounds (464, y, 472, i == rows - 1 ? top + 540 - y : height);
-    }
+    // The pad tiles in a row under the song, then the volume tile.
+    for (int i = 0; i < (int) pads.size(); ++i)
+        pads[(size_t) i]->setBounds (24 + i * 153, 332, 140, 284);
+    volume.setBounds (volumeTile().getX() + 20, volumeTile().getY() + 84, 104, 104);
+}
+
+juce::Rectangle<int> KitnapAudioProcessorEditor::volumeTile() const
+{
+    return { 792, 332, 144, 284 };
 }
 
 //==============================================================================
@@ -249,7 +251,7 @@ void KitnapAudioProcessorEditor::refreshPads()
         const int sel = kit.selected[(size_t) i];
         const bool valid = juce::isPositiveAndBelow (sel, (int) vars.size());
         pads[(size_t) i]->setSound (valid ? vars[(size_t) sel] : nullptr, sel, (int) vars.size());
-        pads[(size_t) i]->setPlaceholder (kit.status == KitState::Status::ready ? "not found in this track" : "");
+        pads[(size_t) i]->setPlaceholder (kit.status == KitState::Status::ready ? "not in this song" : "");
         any = any || valid;
     }
     exportButton.setEnabled (any);

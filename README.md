@@ -11,12 +11,12 @@ Runs as VST3 (any DAW), AU (Logic, GarageBand) and as a standalone app.
 ## Using it
 
 1. Put KITNAP on an instrument track.
-2. Drop an audio file on the ring on the left, or click it to browse. WAV, AIFF, FLAC, MP3 and OGG all work.
-3. Watch the drums get kidnapped: the ring fills up while the AI separates the drums from the rest of the song, splits them into kick, snare, toms, hi-hat and cymbals, and cuts out the sounds. A full song takes a few minutes; the kit is saved with your project, so this only happens once.
-4. Click a pad row to hear it. Use ‹ › to flip through variations, for example when a track has two different snares, or an open and a closed hi-hat. Each pad shows how many of the hits the AI heard sound like its current sound.
+2. Drop an audio file on the song card at the top, or click it to browse. WAV, AIFF, FLAC, MP3 and OGG all work.
+3. Watch the drums get kidnapped: the waveform fills with colour while the AI separates the drums from the rest of the song, splits them into kick, snare, toms, hi-hat and cymbals, and cuts out the sounds. A full song takes a few minutes; the kit is saved with your project, so this only happens once.
+4. Click a pad to hear it. Use ‹ › to flip through variations, for example when a track has two different snares, or an open and a closed hi-hat. Each pad shows how many of the hits the AI heard sound like its current sound.
 5. Drag a pad onto a track or into your sampler to get the WAV, or press **Export kit** for a folder with all of them.
 
-When the kit is ready the ring shows the whole song, one stripe per slice, and a wave of light runs around it; the loudest moments flash brightest.
+When the kit is ready the song's waveform glows in a slowly flowing colour gradient, and a pad's tile lights up in it while its sound plays.
 
 MIDI uses the General MIDI drum map, so any drum pattern plays it straight away:
 
@@ -118,7 +118,7 @@ Source/
   analysis/DrumAnalyzer.*   finds the hits in each part, groups them, cuts out the sounds
   separation/DrumSeparator.* AI drum separation and drum split (ONNX Runtime, loaded at run time)
   engine/KitSampler.*       the 5-pad sampler (MIDI, voice handling)
-  ui/                       the song ring/drop zone, pad rows, the FortyVolts theme (fonts, colours, logo)
+  ui/                       the song card/drop zone, pad tiles, the FortyVolts theme (fonts, colours, logo)
   PluginProcessor.*         loading, background analysis, saving with the project, export
   PluginEditor.*            the window
 Resources/                  fonts (Michroma, Geist, Geist Mono; SIL Open Font License) and the FortyVolts logo

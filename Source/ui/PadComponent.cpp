@@ -29,15 +29,21 @@ void PadComponent::setActivity (float level)
     }
 }
 
-// The "‹ 1/3 ›" picker at the right edge of the row.
+// The "‹ 1/3 ›" picker at the bottom of the tile.
+juce::String PadComponent::pickerText() const
+{
+    return juce::String (variation + 1) + "/" + juce::String (variationCount);
+}
+
 juce::Rectangle<float> PadComponent::previousArea() const
 {
-    return { (float) getWidth() - 74.0f, (float) getHeight() / 2.0f - 16.0f, 18.0f, 32.0f };
+    return { 10.0f, 244.0f, 22.0f, 28.0f };
 }
 
 juce::Rectangle<float> PadComponent::nextArea() const
 {
-    return { (float) getWidth() - 36.0f, (float) getHeight() / 2.0f - 16.0f, 18.0f, 32.0f };
+    const float text = juce::GlyphArrangement::getStringWidth (theme::mono (12.0f), pickerText());
+    return { 38.0f + text, 244.0f, 22.0f, 28.0f };
 }
 
 void PadComponent::rebuildWaveform()
@@ -70,83 +76,86 @@ void PadComponent::paint (juce::Graphics& g)
 {
     const auto bounds = getLocalBounds().toFloat();
     const bool hasSound = sample != nullptr;
-    const float glow = hasSound ? juce::jlimit (0.0f, 1.0f, activity) : 0.0f;
-    const float mid = bounds.getHeight() / 2.0f;
+    const float live = hasSound ? juce::jlimit (0.0f, 1.0f, activity * 1.5f) : 0.0f;
+    const double flow = juce::Time::getMillisecondCounterHiRes() / 1000.0 / theme::auroraSeconds;
 
-    // White row; while its sound plays it turns pale blue and its play button and shape go blue.
-    g.setColour (theme::card.interpolatedWith (theme::activeRow, glow));
-    g.fillRoundedRectangle (bounds, theme::rowRadius);
-    const auto edge = hover && hasSound ? juce::Colour (0xffd9d9d9) : theme::border;
-    g.setColour (edge.interpolatedWith (theme::activeBorder, glow));
-    g.drawRoundedRectangle (bounds.reduced (0.5f), theme::rowRadius, 1.0f);
-
-    // Play button, with a ring that spreads out from it as the hit fades.
-    const auto play = juce::Rectangle<float> (18.0f, mid - 17.0f, 34.0f, 34.0f);
-    if (glow > 0.01f)
+    // White tile; while its sound plays the border turns into the flowing aurora.
+    g.setColour (theme::card);
+    g.fillRoundedRectangle (bounds, theme::tileRadius);
+    g.setColour (hover && hasSound ? juce::Colour (0xffd9d9d9) : theme::border);
+    g.drawRoundedRectangle (bounds.reduced (0.5f), theme::tileRadius, 1.0f);
+    if (live > 0.0f)
     {
-        g.setColour (theme::accent.withAlpha (0.45f * glow));
-        g.drawEllipse (play.expanded (10.0f * (1.0f - glow)), 1.5f + 3.0f * glow);
+        auto aurora = theme::auroraGradient (0.0f, bounds.getWidth(), 0.0f, bounds.getWidth() / 2.0f, flow);
+        g.setGradientFill (aurora);
+        g.setOpacity (live);
+        g.drawRoundedRectangle (bounds.reduced (0.75f), theme::tileRadius, 1.5f);
+        g.setOpacity (1.0f);
     }
-    g.setColour (theme::card.interpolatedWith (theme::accent, glow));
-    g.fillEllipse (play);
-    g.setColour (juce::Colour (0xffe2e2e2).interpolatedWith (theme::accent, glow));
-    g.drawEllipse (play.reduced (0.5f), 1.0f);
-    juce::Path triangle;
-    const auto c = play.getCentre();
-    triangle.addTriangle (c.x - 2.5f, c.y - 4.5f, c.x + 5.0f, c.y, c.x - 2.5f, c.y + 4.5f);
-    g.setColour ((hasSound ? theme::ink : theme::inkDim.withAlpha (0.5f)).interpolatedWith (theme::card, glow));
-    g.fillPath (triangle);
 
     // Name and note.
-    g.setColour (hasSound ? theme::ink : theme::inkDim);
-    g.setFont (theme::font (16.0f, theme::Weight::medium));
     const juce::String name (drumClassName ((DrumClass) pad));
-    g.drawText (name.substring (0, 1) + name.substring (1).toLowerCase(), juce::Rectangle<float> (68.0f, mid - 22.0f, 100.0f, 22.0f), juce::Justification::centredLeft);
+    g.setColour (hasSound ? theme::ink : theme::inkDim);
+    g.setFont (theme::font (14.0f, theme::Weight::medium));
+    g.drawText (name.substring (0, 1) + name.substring (1).toLowerCase(), juce::Rectangle<float> (18.0f, 16.0f, 90.0f, 20.0f),
+                juce::Justification::centredLeft);
     g.setColour (theme::inkDim);
     g.setFont (theme::mono (11.0f));
-    const auto note = juce::MidiMessage::getMidiNoteName (KitSampler::noteForPad (pad), true, true, 3);
-    g.drawText (hasSound ? note + "  " + theme::dot() + "  drag me" : note, juce::Rectangle<float> (68.0f, mid + 2.0f, 100.0f, 16.0f),
-                juce::Justification::centredLeft);
+    g.drawText (juce::MidiMessage::getMidiNoteName (KitSampler::noteForPad (pad), true, true, 3),
+                juce::Rectangle<float> (bounds.getWidth() - 78.0f, 17.0f, 60.0f, 18.0f), juce::Justification::centredRight);
 
     if (! hasSound)
     {
-        g.drawText (placeholder, juce::Rectangle<float> (170.0f, 0.0f, bounds.getWidth() - 188.0f, bounds.getHeight()),
-                    juce::Justification::centredLeft);
+        g.drawText (placeholder, juce::Rectangle<float> (18.0f, 222.0f, bounds.getWidth() - 36.0f, 18.0f), juce::Justification::centredLeft);
         return;
     }
 
-    // Sound shape.
+    // The sound's shape: grey with a black outline, in the aurora while it plays.
     auto shape = waveform;
-    shape.applyTransform (juce::AffineTransform::scale (170.0f, 46.0f).translated (170.0f, mid - 23.0f));
-    g.setColour (theme::fill.interpolatedWith (theme::accent.withAlpha (0.14f), glow));
+    const auto box = juce::Rectangle<float> (18.0f, 92.0f, bounds.getWidth() - 36.0f, 72.0f);
+    shape.applyTransform (juce::AffineTransform::scale (box.getWidth(), box.getHeight()).translated (box.getX(), box.getY()));
+    const auto colours = theme::auroraShort (box.getTopLeft(), box.getTopRight());
+    g.setColour (theme::fill);
     g.fillPath (shape);
-    g.setColour (theme::ink.interpolatedWith (theme::accent, glow));
-    g.strokePath (shape, juce::PathStrokeType (1.0f + 0.25f * glow));
+    g.setColour (theme::ink);
+    g.strokePath (shape, juce::PathStrokeType (1.0f));
+    if (live > 0.0f)
+    {
+        // Covers the plain shape with the coloured one as it lights up.
+        g.setColour (theme::card.withAlpha (live));
+        g.fillPath (shape);
+        g.setGradientFill (colours);
+        g.setOpacity (0.18f * live);
+        g.fillPath (shape);
+        g.setOpacity (live);
+        g.strokePath (shape, juce::PathStrokeType (1.25f));
+        g.setOpacity (1.0f);
+    }
 
     // How many of the song's hits sound like this one.
     g.setColour (theme::ink);
-    g.setFont (theme::font (24.0f, theme::Weight::light));
-    g.drawText (juce::String (sample->hitsStacked), juce::Rectangle<float> (360.0f, mid - 28.0f, 40.0f, 30.0f), juce::Justification::centredLeft);
+    g.setFont (theme::font (26.0f, theme::Weight::light));
+    g.drawText (juce::String (sample->hitsStacked), juce::Rectangle<float> (18.0f, 190.0f, 100.0f, 34.0f), juce::Justification::centredLeft);
     g.setColour (theme::inkDim);
     g.setFont (theme::mono (11.0f));
-    g.drawText (sample->hitsStacked == 1 ? "hit" : "hits", juce::Rectangle<float> (360.0f, mid + 5.0f, 40.0f, 16.0f), juce::Justification::centredLeft);
+    g.drawText ((sample->hitsStacked == 1 ? "hit  " : "hits  ") + theme::dot() + "  drag me",
+                juce::Rectangle<float> (18.0f, 228.0f, bounds.getWidth() - 30.0f, 16.0f), juce::Justification::centredLeft);
 
     if (variationCount > 1)
     {
         g.setColour (theme::ink);
         g.setFont (theme::mono (12.0f));
-        g.drawText (juce::String (variation + 1) + "/" + juce::String (variationCount),
-                    juce::Rectangle<float> (previousArea().getRight(), mid - 8.0f, nextArea().getX() - previousArea().getRight(), 16.0f),
-                    juce::Justification::centred);
+        g.drawText (pickerText(), juce::Rectangle<float> (previousArea().getRight() + 4.0f, 250.0f, 60.0f, 16.0f),
+                    juce::Justification::centredLeft);
 
         auto chevron = [&] (juce::Rectangle<float> r, bool left)
         {
-            const auto p0 = r.getCentre();
+            const auto c = r.getCentre();
             const float d = left ? 1.0f : -1.0f;
             juce::Path p;
-            p.startNewSubPath (p0.x + 2.0f * d, p0.y - 4.0f);
-            p.lineTo (p0.x - 2.0f * d, p0.y);
-            p.lineTo (p0.x + 2.0f * d, p0.y + 4.0f);
+            p.startNewSubPath (c.x + 2.0f * d, c.y - 4.0f);
+            p.lineTo (c.x - 2.0f * d, c.y);
+            p.lineTo (c.x + 2.0f * d, c.y + 4.0f);
             g.strokePath (p, juce::PathStrokeType (1.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
         };
         chevron (previousArea(), true);

@@ -14,7 +14,7 @@ CLASSES = synth.CLASSES
 class Bank:
     """The recorded acoustic kits fetch_data.py builds: bank/index.json lists, per kit and instrument,
     one or more sources (a crash 1 and a crash 2, say), each with its hits from soft to hard, each hit
-    as a close-microphone and a room file."""
+    as a close-microphone file and a room file (None for kits recorded as one stereo mix)."""
 
     def __init__(self, folder):
         self.folder = folder
@@ -61,7 +61,7 @@ def _hit_audio(rng, bank, how, velocity):
     layers, room = data
     close_path, room_path = layers[int(np.clip(round(velocity * (len(layers) - 1) + rng.normal(0, 1.5)), 0, len(layers) - 1))]
     audio = bank.load(close_path)                     # stereo, recorded at its own loudness
-    return audio + room * bank.load(room_path) if room else audio
+    return audio + room * bank.load(room_path) if room and room_path else audio
 
 
 def _residue(rng, n):

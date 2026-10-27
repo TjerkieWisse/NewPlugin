@@ -41,9 +41,9 @@ While the speed test runs, the Mac gets warm and the fans spin up; that's normal
 and on a hard surface. If *Activity Monitor → Memory → Memory Pressure* turns red, stop it with
 Ctrl+C and say so.
 
-`fetch_data.py` without `--groove-only` also downloads the recorded acoustic kits: about 11 GB of
-downloads (the server is slow, so this can take hours), turned into a bank of 1–2 GB in
-`data/bank`. `--delete-downloads` deletes each download once it's converted. Without the kits, the
+`fetch_data.py` without `--groove-only` also downloads the recorded acoustic kits: StemGMD's ten
+kits (200 MB, quick) and three DrumGizmo kits (about 11 GB from a slow server, so this can take
+hours), turned into a bank of 1–2 GB in `data/bank`. `--kits stemgmd` fetches only StemGMD. `--delete-downloads` deletes each download once it's converted. Without the kits, the
 examples use synthesised sounds only.
 
 ## Data and licences
@@ -51,6 +51,7 @@ examples use synthesised sounds only.
 | What | Source | Licence |
 |---|---|---|
 | Grooves | [Groove MIDI Dataset](https://magenta.tensorflow.org/datasets/groove), Google Magenta | CC BY 4.0 |
+| Acoustic kits | [StemGMD](https://zenodo.org/records/7882857) single hits: 10 kits (Politecnico di Milano). Its sounds come from Logic Pro's libraries: have a lawyer check this before release | CC BY 4.0 |
 | Acoustic kits | [DRSKit](https://drumgizmo.org/wiki/doku.php?id=kits:drskit), [MuldjordKit](https://drumgizmo.org/wiki/doku.php?id=kits:muldjordkit), [CrocellKit](https://drumgizmo.org/wiki/doku.php?id=kits:crocellkit) from DrumGizmo | CC BY 4.0 |
 | Synthesised sounds, patterns, effects | made by this code | ours |
 | Model code | MDX23C / TFC-TDF v3 as in ZFTurbo's Music-Source-Separation-Training | MIT |

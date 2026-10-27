@@ -1,14 +1,15 @@
 # Downloads the training material and prepares it in data/:
 #   data/groove/  the Groove MIDI Dataset's MIDI files (Google Magenta, CC BY 4.0), 3 MB
-#   data/bank/    recorded acoustic kits from DrumGizmo (CC BY 4.0), as one-shots per instrument
+#   data/bank/    recorded acoustic kits as one-shots per instrument: the single hits of StemGMD's ten
+#                 kits (Politecnico di Milano, CC BY 4.0; 200 MB) and three DrumGizmo kits (CC BY 4.0)
 #
 # The DrumGizmo kits are recorded on up to 16 microphones. For every hit this keeps two stereo
 # mixdowns, the close microphones and the room (overheads and ambience), so the generator can blend
 # them differently every time. Downloads resume if interrupted.
 #
-# Usage: python fetch_data.py [--data data] [--groove-only] [--kits drs,muldjord,crocell]
+# Usage: python fetch_data.py [--data data] [--groove-only] [--kits stemgmd,drs,muldjord,crocell]
 #                             [--delete-downloads]
-import argparse, io, json, os, re, sys, urllib.request, zipfile
+import argparse, io, json, os, re, sys, urllib.error, urllib.request, zipfile
 import xml.etree.ElementTree as ET
 import numpy as np, soundfile as sf
 from scipy import signal
@@ -16,6 +17,7 @@ from scipy import signal
 RATE = 44100
 GROOVE_URL = 'https://storage.googleapis.com/magentadata/datasets/groove/groove-v1.0.0-midionly.zip'
 KITS = {
+    'stemgmd': 'https://zenodo.org/records/7882857/files/StemGMD_single_hits.zip?download=1',
     'drs': 'https://drumgizmo.org/kits/DRSKit/DRSKit2_1.zip',
     'muldjord': 'https://drumgizmo.org/kits/MuldjordKit/MuldjordKit3.zip',
     'crocell': 'https://drumgizmo.org/kits/CrocellKit/CrocellKit1_1.zip',
@@ -27,7 +29,13 @@ def download(url, path):
     """Downloads url to path, resuming a partial file."""
     done = os.path.getsize(path) if os.path.exists(path) else 0
     request = urllib.request.Request(url, headers={'Range': f'bytes={done}-'} if done else {})
-    with urllib.request.urlopen(request) as response:
+    try:
+        response = urllib.request.urlopen(request)
+    except urllib.error.HTTPError as e:
+        if e.code == 416:                             # nothing left to fetch: already complete
+            return
+        raise
+    with response:
         if done and response.status != 206:
             done = 0                                  # the server ignored the range: start over
         total = done + int(response.headers.get('Content-Length', 0))
@@ -58,6 +66,48 @@ def fetch_groove(data, downloads):
                 os.makedirs(os.path.dirname(out), exist_ok=True)
                 open(out, 'wb').write(z.read(name))
     print('Grooves ready.')
+
+
+# --- StemGMD ---------------------------------------------------------------------------------------
+
+# StemGMD's names for its nine pieces; each comes at ten velocities, 0 the hardest and 9 the softest.
+STEMGMD_PIECES = {
+    'kick': 'kick', 'snare': 'snare', 'hihat_closed': 'hihat_closed', 'hihat_open': 'hihat_open',
+    'hi_tom': 'tom0', 'mid_tom': 'tom1', 'low_tom': 'tom2', 'crash_left': 'crash', 'ride': 'ride',
+}
+
+
+def convert_stemgmd(zip_path, bank):
+    """StemGMD's single hits: ten kits, each a kit of its own in the bank (already stereo mixes, so
+    there's no separate room part)."""
+    z = zipfile.ZipFile(zip_path)
+    hits = {}
+    for name in z.namelist():
+        parts = name.split('/')
+        if name.endswith('.wav') and len(parts) == 3:
+            piece, velocity = parts[2][:-4].rsplit('-', 1)
+            if piece in STEMGMD_PIECES:
+                hits.setdefault(parts[1], {}).setdefault(piece, {})[int(velocity)] = name
+    index = {}
+    for kit, pieces in sorted(hits.items()):
+        name = 'stemgmd_' + kit
+        index[name] = {}
+        for piece, files in sorted(pieces.items()):
+            entries = []
+            for j, velocity in enumerate(sorted(files, reverse=True)):            # soft to hard
+                audio, rate = sf.read(io.BytesIO(z.read(files[velocity])), dtype='float32', always_2d=True)
+                if rate != RATE:
+                    audio = signal.resample_poly(audio, RATE, rate, axis=0)
+                level = np.max(np.abs(audio), axis=1)
+                start = max(0, int(np.argmax(level > level.max() * 0.01)) - int(0.002 * RATE))  # the hit starts on time
+                audio, _ = trim(audio[start:].T, np.zeros((2, len(audio) - start)))
+                rel = os.path.join(name, piece, f'{j:02d}.flac')
+                os.makedirs(os.path.join(bank, name, piece), exist_ok=True)
+                sf.write(os.path.join(bank, rel), audio.T, RATE, subtype='PCM_16')
+                entries.append([rel, None])
+            index[name].setdefault(STEMGMD_PIECES[piece], []).append(entries)
+        print(f'  {name}: {len(pieces)} pieces', flush=True)
+    return index
 
 
 # --- DrumGizmo kits -------------------------------------------------------------------------------
@@ -209,14 +259,17 @@ def main():
     index_path = os.path.join(bank, 'index.json')
     index = json.load(open(index_path)) if os.path.exists(index_path) else {}
     for kit in args.kits.split(','):
-        if kit in index:
-            print(f'{kit} kit already in the bank.')
+        if any(k == kit or k.startswith(kit + '_') for k in index):
+            print(f'{kit} already in the bank.')
             continue
-        zip_path = os.path.join(downloads, os.path.basename(KITS[kit]))
-        print(f'Downloading the {kit} kit...')
+        zip_path = os.path.join(downloads, os.path.basename(KITS[kit]).split('?')[0])
+        print(f'Downloading {kit}...')
         download(KITS[kit], zip_path)
-        print(f'Converting the {kit} kit...')
-        index[kit] = convert_kit(zip_path, kit, bank)
+        print(f'Converting {kit}...')
+        if kit == 'stemgmd':
+            index.update(convert_stemgmd(zip_path, bank))
+        else:
+            index[kit] = convert_kit(zip_path, kit, bank)
         json.dump(index, open(index_path, 'w'), indent=1)
         if args.delete_downloads:
             os.remove(zip_path)

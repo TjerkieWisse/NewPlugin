@@ -7,8 +7,10 @@
 import argparse, os, platform, subprocess, sys, time
 os.environ.setdefault('PYTORCH_ENABLE_MPS_FALLBACK', '1')
 # On a Mac the GPU shares memory with everything else. Cap it at 70% of what macOS recommends, so a
-# setting that doesn't fit fails cleanly here instead of making the Mac swap to its SSD.
+# setting that doesn't fit fails cleanly here instead of making the Mac swap to its SSD. The low
+# limit (when PyTorch starts returning memory) has to stay below it.
 os.environ.setdefault('PYTORCH_MPS_HIGH_WATERMARK_RATIO', '0.7')
+os.environ.setdefault('PYTORCH_MPS_LOW_WATERMARK_RATIO', '0.5')
 import numpy as np, torch
 import model as M
 

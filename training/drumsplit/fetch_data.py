@@ -48,7 +48,7 @@ def download(url, path):
                 done += len(chunk)
                 if total and int(done * 20 / total) != shown:
                     shown = int(done * 20 / total)
-                    print(f'  {os.path.basename(path)}: {done / 1e9:.2f} of {total / 1e9:.2f} GB', flush=True)
+                    print(f'  {os.path.basename(path)}: {done / 1e6:.0f} of {total / 1e6:.0f} MB', flush=True)
 
 
 def fetch_groove(data, downloads):

@@ -1,0 +1,7 @@
+torch>=2.5
+numpy
+scipy
+soundfile
+pyyaml
+onnx
+onnxruntime

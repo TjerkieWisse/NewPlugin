@@ -122,4 +122,5 @@ def main():
     if error > 1e-3:
         sys.exit('exported model does not match')
 
-main()
+if __name__ == '__main__':
+    main()

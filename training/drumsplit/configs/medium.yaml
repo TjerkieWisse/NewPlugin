@@ -1,0 +1,30 @@
+# KITNAP drum split model, medium size. Same layout as jarredou's DrumSep config (which uses 128 channels),
+# so tools/export_drumsep.py exports it. dim_t is the training segment in frames: 256 = 2.97 s.
+audio:
+  dim_f: 1024
+  dim_t: 256
+  hop_length: 512
+  n_fft: 2048
+  num_channels: 2
+  sample_rate: 44100
+
+model:
+  act: gelu
+  bottleneck_factor: 4
+  growth: 48
+  norm: InstanceNorm
+  num_blocks_per_scale: 2
+  num_channels: 48
+  num_scales: 5
+  num_subbands: 4
+  scale:
+  - 2
+  - 2
+
+training:
+  instruments:
+  - kick
+  - snare
+  - toms
+  - hh
+  - cymbals

@@ -23,7 +23,7 @@ class Bank:
         if os.path.exists(path):
             self.kits = json.load(open(path))
 
-    @functools.lru_cache(maxsize=2048)
+    @functools.lru_cache(maxsize=512)          # about 0.5 GB per worker at most
     def load(self, relpath):
         audio, rate = sf.read(os.path.join(self.folder, relpath), dtype='float32', always_2d=True)
         assert rate == RATE

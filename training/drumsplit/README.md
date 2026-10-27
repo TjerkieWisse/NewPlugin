@@ -46,6 +46,25 @@ kits (200 MB, quick) and three DrumGizmo kits (about 11 GB from a slow server, s
 hours), turned into a bank of 1–2 GB in `data/bank`. `--kits stemgmd` fetches only StemGMD. `--delete-downloads` deletes each download once it's converted. Without the kits, the
 examples use synthesised sounds only.
 
+## Training
+
+```bash
+.venv/bin/python train.py                         # the large model, about 15 hours on an M5
+```
+
+It prints its progress every 50 updates and checks itself every 1000 (how close each part comes to
+the truth, in dB: higher is better). Press **Ctrl+C** to stop: it saves first. Run the same command
+again to carry on. Everything goes into `runs/large/`; the best version so far is `best.pt`.
+
+To hear how it's doing at any point, split a drum stem with the best version so far:
+
+```bash
+.venv/bin/python split.py "path/to/drums.wav"     # writes the five parts next to it
+```
+
+When it's done, `export.py` makes `runs/large/kitnap_drumsep5.onnx`, the file the plugin loads in
+place of the current split model.
+
 ## Data and licences
 
 | What | Source | Licence |

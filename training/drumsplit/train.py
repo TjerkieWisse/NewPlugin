@@ -12,6 +12,14 @@ os.environ.setdefault('PYTORCH_MPS_HIGH_WATERMARK_RATIO', '0.7')
 os.environ.setdefault('PYTORCH_MPS_LOW_WATERMARK_RATIO', '0.5')
 import numpy as np, torch
 import model as M
+try:                                    # macOS allows only 256 open files per process by default
+    import resource
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    resource.setrlimit(resource.RLIMIT_NOFILE, (min(hard, 8192) if hard != resource.RLIM_INFINITY else 8192, hard))
+except (ImportError, ValueError, OSError):
+    pass
+# Batches from the example makers travel through shared-memory files rather than one open file each.
+torch.multiprocessing.set_sharing_strategy('file_system')
 import generator as G
 
 PARTS = G.CLASSES

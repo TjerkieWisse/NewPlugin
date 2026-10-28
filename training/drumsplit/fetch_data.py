@@ -9,7 +9,8 @@
 # them differently every time. Downloads resume if interrupted.
 #
 # Usage: python fetch_data.py [--data data] [--groove-only] [--kits stemgmd,freesound,drs,muldjord,crocell]
-#                             [--delete-downloads]
+#                             [--delete-downloads] [--check]
+#   --check reads every sound in the bank once and drops any that can't be read.
 import argparse, io, json, os, re, sys, urllib.error, urllib.request, zipfile
 import xml.etree.ElementTree as ET
 import numpy as np, soundfile as sf
@@ -242,6 +243,35 @@ def convert_kit(zip_path, kit, bank):
     return index
 
 
+def check_bank(bank):
+    """Reads every sound in the bank and drops the ones that can't be read from the index."""
+    index_path = os.path.join(bank, 'index.json')
+    index = json.load(open(index_path))
+    bad, total = [], 0
+    for kit, instruments in index.items():
+        for inst, sources in instruments.items():
+            good_sources = []
+            for layers in sources:
+                good = []
+                for layer in layers:
+                    total += 1
+                    try:
+                        for path in layer:
+                            if path:
+                                audio, rate = sf.read(os.path.join(bank, path), dtype='float32')
+                                assert rate == RATE and len(audio) > 0
+                        good.append(layer)
+                    except Exception as e:
+                        bad.append((layer[0], repr(e)))
+                if good:
+                    good_sources.append(good)
+            instruments[inst] = good_sources
+    for path, error in bad:
+        print('  unreadable:', path, error)
+    json.dump(index, open(index_path, 'w'), indent=1)
+    print(f'Checked {total} sounds: {len(bad)} unreadable, dropped from the bank.')
+
+
 def freesound_key(data):
     """The Freesound API key: from FREESOUND_KEY, or data/freesound_key.txt, or asked for once and kept
     there (data/ stays out of git)."""
@@ -259,7 +289,10 @@ def main():
     ap.add_argument('--groove-only', action='store_true')
     ap.add_argument('--kits', default='stemgmd,freesound,drs,muldjord,crocell')
     ap.add_argument('--delete-downloads', action='store_true')
+    ap.add_argument('--check', action='store_true')
     args = ap.parse_args()
+    if args.check:
+        return check_bank(os.path.join(args.data, 'bank'))
 
     downloads = os.path.join(args.data, 'downloads')
     os.makedirs(downloads, exist_ok=True)

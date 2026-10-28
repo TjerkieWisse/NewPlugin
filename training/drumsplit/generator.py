@@ -4,7 +4,7 @@
 # each part mixed with its own EQ, compression, saturation, panning and reverb, the whole kit through
 # a bus compressor or limiter, and sometimes a little of other instruments left in the mix, the way a
 # drum stem pulled out of a song has some.
-import json, os, functools, numpy as np, soundfile as sf
+import json, os, sys, functools, numpy as np, soundfile as sf
 import fx, patterns, synth
 
 RATE = 44100
@@ -25,8 +25,14 @@ class Bank:
 
     @functools.lru_cache(maxsize=512)          # about 0.5 GB per worker at most
     def load(self, relpath):
-        audio, rate = sf.read(os.path.join(self.folder, relpath), dtype='float32', always_2d=True)
-        assert rate == RATE
+        """A hit's audio, or None if its file can't be read (it's then left out, with a warning)."""
+        try:
+            audio, rate = sf.read(os.path.join(self.folder, relpath), dtype='float32', always_2d=True)
+        except Exception as e:
+            print(f'Skipping {relpath}: {type(e).__name__} {e!r}', file=sys.stderr, flush=True)
+            return None
+        if rate != RATE or len(audio) == 0:
+            return None
         return audio.T.copy() if audio.shape[1] > 1 else audio[:, 0].copy()   # mono hits get panned
 
 
@@ -66,9 +72,12 @@ def _hit_audio(rng, bank, how, velocity):
     layers, room = data
     close_path, room_path = layers[int(np.clip(round(velocity * (len(layers) - 1) + rng.normal(0, 1.5)), 0, len(layers) - 1))]
     audio = bank.load(close_path)                     # recorded at its own loudness
+    if audio is None:
+        return None
     if len(layers) == 1:                              # a single one-shot: its loudness follows the velocity
         audio = audio * velocity ** 1.5
-    return audio + room * bank.load(room_path) if room and room_path else audio
+    room_audio = bank.load(room_path) if room and room_path else None
+    return audio + room * room_audio if room_audio is not None and room_audio.shape == audio.shape else audio
 
 
 def _residue(rng, n):
@@ -105,6 +114,8 @@ def make_example(rng, grooves, bank, seconds):
     hat_times = [t for t, inst, _ in hits if inst.startswith('hihat')]
     for t, inst, velocity in hits:
         audio = _hit_audio(rng, bank, kit[inst], velocity)
+        if audio is None:
+            continue
         if inst == 'hihat_open':                      # the next hi-hat hit chokes an open hat
             later = [h for h in hat_times if h > t + 0.01]
             if later:

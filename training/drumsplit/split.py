@@ -2,6 +2,7 @@
 # doing. Works like the plugin: chunks of the training length, overlapping by half and cross-faded.
 #
 # Usage: python split.py <drums.wav> [--run runs/large] [--out <folder>]
+# The parts go into '<drums> - parts (update N)' next to the file, N being the version's training update.
 import argparse, os
 os.environ.setdefault('PYTORCH_ENABLE_MPS_FALLBACK', '1')
 import numpy as np, soundfile as sf, torch
@@ -52,7 +53,8 @@ def main():
             weight[start:start + chunk] += fade
     parts = parts[:, :, hop:hop + n] / np.maximum(weight[hop:hop + n], 1e-6)
 
-    out = args.out or os.path.splitext(args.drums)[0] + ' - parts'
+    # Named after the training update, so splits from later, better versions sit next to earlier ones.
+    out = args.out or f'{os.path.splitext(args.drums)[0]} - parts (update {state["step"]})'
     os.makedirs(out, exist_ok=True)
     for i, name in enumerate(G.CLASSES):
         sf.write(os.path.join(out, f'{i + 1} {name}.wav'), parts[i].T, G.RATE, subtype='PCM_24')

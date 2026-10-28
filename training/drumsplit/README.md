@@ -43,7 +43,9 @@ Ctrl+C and say so.
 
 `fetch_data.py` without `--groove-only` also downloads the recorded acoustic kits: StemGMD's ten
 kits (200 MB, quick) and three DrumGizmo kits (about 11 GB from a slow server, so this can take
-hours), turned into a bank of 1–2 GB in `data/bank`. `--kits stemgmd` fetches only StemGMD. `--delete-downloads` deletes each download once it's converted. Without the kits, the
+hours), turned into a bank of 1–2 GB in `data/bank`. `--kits stemgmd` fetches only StemGMD.
+`--kits freesound` fetches CC0 one-shots from Freesound: it asks once for your free API key
+(freesound.org/apiv2/apply) and keeps it in `data/freesound_key.txt`. `--delete-downloads` deletes each download once it's converted. Without the kits, the
 examples use synthesised sounds only.
 
 ## Training
@@ -71,8 +73,10 @@ place of the current split model.
 |---|---|---|
 | Grooves | [Groove MIDI Dataset](https://magenta.tensorflow.org/datasets/groove), Google Magenta | CC BY 4.0 |
 | Acoustic kits | [StemGMD](https://zenodo.org/records/7882857) single hits: 10 kits (Politecnico di Milano). Its sounds come from Logic Pro's libraries: have a lawyer check this before release | CC BY 4.0 |
+| One-shots, many electronic | [Freesound](https://freesound.org), only sounds their makers released as CC0; `data/bank/freesound/credits.csv` lists each one and its maker | CC0 |
 | Acoustic kits | [DRSKit](https://drumgizmo.org/wiki/doku.php?id=kits:drskit), [MuldjordKit](https://drumgizmo.org/wiki/doku.php?id=kits:muldjordkit), [CrocellKit](https://drumgizmo.org/wiki/doku.php?id=kits:crocellkit) from DrumGizmo | CC BY 4.0 |
 | Synthesised sounds, patterns, effects | made by this code | ours |
 | Model code | MDX23C / TFC-TDF v3 as in ZFTurbo's Music-Source-Separation-Training | MIT |
 
-CC BY 4.0 allows commercial use with credit: KITNAP's credits must name these sources.
+CC BY 4.0 allows commercial use with credit: KITNAP's credits must name these sources. CC0 needs no
+credit, but the list is kept anyway.

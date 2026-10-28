@@ -1,13 +1,14 @@
 # Downloads the training material and prepares it in data/:
 #   data/groove/  the Groove MIDI Dataset's MIDI files (Google Magenta, CC BY 4.0), 3 MB
-#   data/bank/    recorded acoustic kits as one-shots per instrument: the single hits of StemGMD's ten
-#                 kits (Politecnico di Milano, CC BY 4.0; 200 MB) and three DrumGizmo kits (CC BY 4.0)
+#   data/bank/    recorded drum sounds as one-shots per instrument: the single hits of StemGMD's ten
+#                 kits (Politecnico di Milano, CC BY 4.0; 200 MB), three DrumGizmo kits (CC BY 4.0),
+#                 and CC0 one-shots from Freesound (needs a free API key; see freesound.py)
 #
 # The DrumGizmo kits are recorded on up to 16 microphones. For every hit this keeps two stereo
 # mixdowns, the close microphones and the room (overheads and ambience), so the generator can blend
 # them differently every time. Downloads resume if interrupted.
 #
-# Usage: python fetch_data.py [--data data] [--groove-only] [--kits stemgmd,drs,muldjord,crocell]
+# Usage: python fetch_data.py [--data data] [--groove-only] [--kits stemgmd,freesound,drs,muldjord,crocell]
 #                             [--delete-downloads]
 import argparse, io, json, os, re, sys, urllib.error, urllib.request, zipfile
 import xml.etree.ElementTree as ET
@@ -241,11 +242,22 @@ def convert_kit(zip_path, kit, bank):
     return index
 
 
+def freesound_key(data):
+    """The Freesound API key: from FREESOUND_KEY, or data/freesound_key.txt, or asked for once and kept
+    there (data/ stays out of git)."""
+    path = os.path.join(data, 'freesound_key.txt')
+    key = os.environ.get('FREESOUND_KEY') or (open(path).read().strip() if os.path.exists(path) else '')
+    if not key:
+        key = input('Freesound API key (from freesound.org/apiv2/apply): ').strip()
+        open(path, 'w').write(key)
+    return key
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--data', default='data')
     ap.add_argument('--groove-only', action='store_true')
-    ap.add_argument('--kits', default=','.join(KITS))
+    ap.add_argument('--kits', default='stemgmd,freesound,drs,muldjord,crocell')
     ap.add_argument('--delete-downloads', action='store_true')
     args = ap.parse_args()
 
@@ -261,6 +273,12 @@ def main():
     for kit in args.kits.split(','):
         if any(k == kit or k.startswith(kit + '_') for k in index):
             print(f'{kit} already in the bank.')
+            continue
+        if kit == 'freesound':
+            import freesound
+            print('Fetching one-shots from Freesound...')
+            index[kit] = freesound.harvest(bank, freesound_key(args.data))
+            json.dump(index, open(index_path, 'w'), indent=1)
             continue
         zip_path = os.path.join(downloads, os.path.basename(KITS[kit]).split('?')[0])
         print(f'Downloading {kit}...')

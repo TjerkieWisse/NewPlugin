@@ -27,15 +27,20 @@ class Bank:
     def load(self, relpath):
         audio, rate = sf.read(os.path.join(self.folder, relpath), dtype='float32', always_2d=True)
         assert rate == RATE
-        return audio.T.copy()
+        return audio.T.copy() if audio.shape[1] > 1 else audio[:, 0].copy()   # mono hits get panned
 
 
 def _choose_kit(rng, bank):
     """For every instrument, how to sound it: ('synth', one-shot) or ('acoustic', samples soft..hard).
     Mostly one coherent kit, sometimes with instruments swapped in from elsewhere."""
     made = synth.synth_kit(rng)
-    kit_names = list(bank.kits)
-    base = kit_names[rng.integers(len(kit_names))] if kit_names and rng.random() < 0.5 else None
+    kit_names = [k for k in bank.kits if k != 'freesound']
+    # Freesound's one-shots (many of them electronic) a third of the time, a recorded kit or our own
+    # synthesised sounds the rest.
+    if 'freesound' in bank.kits and rng.random() < 0.3:
+        base = 'freesound'
+    else:
+        base = kit_names[rng.integers(len(kit_names))] if kit_names and rng.random() < 0.5 else None
     kit = {}
     for inst in patterns.INSTRUMENT_CLASS:
         name = 'toms' if inst.startswith('tom') else inst
@@ -60,7 +65,9 @@ def _hit_audio(rng, bank, how, velocity):
         return data * velocity ** 1.5                 # mono; panned later
     layers, room = data
     close_path, room_path = layers[int(np.clip(round(velocity * (len(layers) - 1) + rng.normal(0, 1.5)), 0, len(layers) - 1))]
-    audio = bank.load(close_path)                     # stereo, recorded at its own loudness
+    audio = bank.load(close_path)                     # recorded at its own loudness
+    if len(layers) == 1:                              # a single one-shot: its loudness follows the velocity
+        audio = audio * velocity ** 1.5
     return audio + room * bank.load(room_path) if room and room_path else audio
 
 

@@ -48,6 +48,9 @@ class Net(nn.Module):
         m, a = cfg['model'], cfg['audio']
         self.instruments = cfg['training']['instruments']
         self.k = m['num_subbands']
+        # 'mask': the network gives each part a complex mask that is applied to the input (KITNAP's own
+        # models). Otherwise it gives the parts' spectrograms directly (jarredou's DrumSep).
+        self.mask = m.get('output') == 'mask'
         dim_c = self.k * a['num_channels'] * 2
         n, scale, l, c, g, bn = m['num_scales'], m['scale'], m['num_blocks_per_scale'], m['num_channels'], m['growth'], m['bottleneck_factor']
         f = a['dim_f'] // self.k
@@ -73,6 +76,7 @@ class Net(nn.Module):
     # x: [1, 4, dim_f, dim_t] spectrogram (left re, left im, right re, right im), as torch.stft gives
     # it with center=True and a periodic Hann window. Returns [1, stems, 4, dim_f, dim_t].
     def forward(self, x):
+        spec = x
         b, c, f, t = x.shape
         mix = x = x.reshape(b, c, self.k, f // self.k, t).reshape(b, c * self.k, f // self.k, t)
         first = x = self.first_conv(x)
@@ -87,7 +91,14 @@ class Net(nn.Module):
         x = self.final_conv(torch.cat([mix, x], 1))
         b, c, f, t = x.shape
         x = x.reshape(b, c // self.k, self.k, f, t).reshape(b, c // self.k, f * self.k, t)
-        return x.reshape(b, len(self.instruments), -1, f * self.k, t)
+        x = x.reshape(b, len(self.instruments), -1, f * self.k, t)
+        if self.mask:
+            # Complex multiplication per channel; every part starts out as an equal share of the input.
+            m_re, m_im = x[:, :, 0::2] + 1.0 / len(self.instruments), x[:, :, 1::2]
+            s_re, s_im = spec[:, None, 0::2], spec[:, None, 1::2]
+            x = torch.stack([m_re * s_re - m_im * s_im, m_re * s_im + m_im * s_re], dim=3)
+            x = x.reshape(b, len(self.instruments), -1, f * self.k, t)
+        return x
 
 
 def load_config(path):

@@ -13,6 +13,7 @@ model:
   bottleneck_factor: 4
   growth: 48
   norm: InstanceNorm
+  output: mask        # parts as masks on the input; see tools/export_drumsep.py
   num_blocks_per_scale: 2
   num_channels: 48
   num_scales: 5

@@ -71,7 +71,11 @@ def main():
     dim_f, dim_t = cfg['audio']['dim_f'], cfg['audio']['dim_t']
     seconds = M.frames_to_samples(dim_t) / G.RATE
 
-    net = M.Net(cfg).to(device)
+    net = M.Net(cfg)
+    if net.mask:                                      # every part starts as an equal share of the mix
+        torch.nn.init.zeros_(net.final_conv[-1].weight)
+    net = net.to(device)
+    output = 'mask' if net.mask else 'direct'
     ema = copy.deepcopy(net).eval()
     for p in ema.parameters():
         p.requires_grad_(False)
@@ -84,6 +88,9 @@ def main():
     last = os.path.join(run, 'last.pt')
     if os.path.exists(last):
         state = torch.load(last, map_location='cpu', weights_only=True)
+        if state.get('output', 'direct') != output:
+            raise SystemExit(f'{run} holds a run of an older kind of model, which this one can\'t carry on from. '
+                             f'Rename or delete that folder to start afresh.')
         net.load_state_dict(state['model']); ema.load_state_dict(state['ema'])
         opt.load_state_dict(state['opt']); scaler.load_state_dict(state['scaler'])
         step, best = state['step'], state['best']
@@ -94,7 +101,7 @@ def main():
 
     def save(path, extra=None):
         state = {'model': net.state_dict(), 'ema': ema.state_dict(), 'opt': opt.state_dict(),
-                 'scaler': scaler.state_dict(), 'step': step, 'best': best, 'config': args.config}
+                 'scaler': scaler.state_dict(), 'step': step, 'best': best, 'config': args.config, 'output': output}
         torch.save(state | (extra or {}), path + '.tmp')
         os.replace(path + '.tmp', path)               # never a half-written checkpoint
 

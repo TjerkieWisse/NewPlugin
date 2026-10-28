@@ -60,6 +60,13 @@ def main():
         sf.write(os.path.join(out, f'{i + 1} {name}.wav'), parts[i].T, G.RATE, subtype='PCM_24')
     print('Parts written to', out)
 
+    # How loud each part came out, and how much of it is deep bass (which laptop speakers barely play).
+    level = lambda x: 10 * np.log10(np.mean(x ** 2) + 1e-12)
+    bass = lambda x: np.fft.irfft(np.fft.rfft(x, axis=-1) * (np.fft.rfftfreq(x.shape[-1], 1 / G.RATE) < 150), x.shape[-1], axis=-1)
+    print(f'  {"drums in":10} {level(audio.T):6.1f} dBFS, {level(bass(audio.T)):6.1f} dBFS of it below 150 Hz')
+    for i, name in enumerate(G.CLASSES):
+        print(f'  {name:10} {level(parts[i]):6.1f} dBFS, {level(bass(parts[i])):6.1f} dBFS of it below 150 Hz')
+
 
 if __name__ == '__main__':
     main()

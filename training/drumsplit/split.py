@@ -16,6 +16,11 @@ def main():
     ap.add_argument('--out', default=None)
     args = ap.parse_args()
 
+    if not os.path.isfile(args.drums):
+        raise SystemExit(f"Can't find {args.drums!r}. Tip: drag the file into Terminal to paste its full path.")
+    if not os.path.exists(os.path.join(args.run, 'best.pt')):
+        raise SystemExit(f'No trained model in {args.run} yet: the first one is saved at the first check, '
+                         'about 12 minutes into training.')
     device = torch.device('mps' if torch.backends.mps.is_available() else 'cpu')
     state = torch.load(os.path.join(args.run, 'best.pt'), map_location='cpu', weights_only=True)
     cfg = M.load_config(state['config'])

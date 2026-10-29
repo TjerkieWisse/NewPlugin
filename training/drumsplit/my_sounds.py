@@ -4,9 +4,9 @@
 #   my_sounds/trap/808s/808 Long.wav
 #   my_sounds/house/Hats/Open Hat 3.wav
 # Each folder directly in my_sounds/ becomes a collection of its own (realistic, trap, house). Which
-# instrument a sound is, is read from its folder and file names (kick, 808, snare, clap, rim, tom,
-# hat, open hat, crash, ride, ...); sounds that name nothing recognisable (perc, shaker, fx, ...) are
-# skipped and listed. Every sound gets the same checks as Freesound's: one clear hit, sounding like
+# instrument a sound is, is read from its file name, or else the nearest folder name that says (kick,
+# 808, snare, clap, rim, tom, hat, open hat, crash, ride, ...); sounds that name nothing recognisable
+# (perc, shaker, ...) or aren't single hits (reverse cymbals, rolls, fills, loops) are skipped and listed. Every sound gets the same checks as Freesound's: one clear hit, sounding like
 # what it's called.
 #
 # Only use sounds you may use to train a model you sell: ones you made or recorded yourself, or with
@@ -17,8 +17,8 @@ import freesound
 
 AUDIO = ('.wav', '.aif', '.aiff', '.flac', '.ogg', '.mp3')
 
-# Checked in this order, so "808 snare" is a snare and "open hat" is an open hi-hat. Short tokens must
-# match a whole word; longer ones may be part of one ("kick" in "808kick").
+# Checked in this order, so "808 snare" is a snare and "open hat" is an open hi-hat. Words match as a
+# whole, except those in PART_OF_WORD, which may also be part of one ("kick" in "808kick").
 KINDS = [
     ('hihat_open', {'open', 'ohh', 'ohat', 'openhat', 'openhh'}, {'hat', 'hh', 'hihat', 'hihats', 'hats'}),
     ('hihat_closed', {'hat', 'hats', 'hh', 'hihat', 'hihats', 'chh', 'chat', 'closedhat', 'closedhh'}, None),
@@ -29,6 +29,11 @@ KINDS = [
     ('toms', {'tom', 'toms', 'floortom'}, None),
     ('kick', {'kick', 'kicks', 'kik', 'bd', 'bassdrum', '808', '808s'}, None),
 ]
+PART_OF_WORD = {'kick', 'kicks', 'snare', 'snares', 'hihat', 'hihats', 'crash', 'clap', 'claps', 'rimshot',
+                'sidestick', 'bassdrum', 'openhat', 'closedhat', 'floortom', 'cymbal', 'cymbals'}
+# Not single hits, whatever else the name says: reverse cymbals and swells, rolls, fills, loops.
+NOT_A_HIT = {'reverse', 'reversed', 'rev', 'riser', 'risers', 'swell', 'swells', 'sweep', 'roll', 'rolls',
+             'fill', 'fills', 'loop', 'loops', 'fx', 'buildup', 'uplifter', 'downlifter'}
 SEARCH_NAME = {'snare': 'snare', 'rim': 'rim', 'toms': 'toms', 'kick': 'kick', 'hihat_open': 'hihat_open',
                'hihat_closed': 'hihat_closed', 'crash': 'crash', 'ride': 'ride'}
 
@@ -37,7 +42,7 @@ def _kind_in(name):
     words = re.findall(r'[a-z]+|\d+[a-z]*', name.lower())
     text = ''.join(words)
     def has(tokens):
-        return any(w in tokens for w in words) or any(len(t) > 3 and t in text for t in tokens)
+        return any(w in tokens for w in words) or any(t in text for t in tokens & PART_OF_WORD)
     for kind, tokens, also in KINDS:
         if has(tokens) and (also is None or has(also)):
             return kind
@@ -49,6 +54,8 @@ def kind_of(path):
     it's in, then the one above, and so on (so 'Kicks & Snares/Kick 1.wav' is a kick)."""
     parts = path.replace('\\', '/').split('/')
     parts[-1] = os.path.splitext(parts[-1])[0]
+    if any(w in NOT_A_HIT for part in parts for w in re.findall(r'[a-z]+', part.lower())):
+        return None
     for name in reversed(parts):
         kind = _kind_in(name)
         if kind:

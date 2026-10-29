@@ -3,6 +3,7 @@
 #   data/bank/    recorded drum sounds as one-shots per instrument: the single hits of StemGMD's ten
 #                 kits (Politecnico di Milano, CC BY 4.0; 200 MB), three DrumGizmo kits (CC BY 4.0),
 #                 and CC0 one-shots from Freesound (needs a free API key; see freesound.py)
+#   and with --kits mine, your own one-shots from my_sounds/ (see my_sounds.py)
 #
 # The DrumGizmo kits are recorded on up to 16 microphones. For every hit this keeps two stereo
 # mixdowns, the close microphones and the room (overheads and ambience), so the generator can blend
@@ -290,6 +291,7 @@ def main():
     ap.add_argument('--kits', default='stemgmd,freesound,drs,muldjord,crocell')
     ap.add_argument('--delete-downloads', action='store_true')
     ap.add_argument('--check', action='store_true')
+    ap.add_argument('--mine', default='my_sounds', help='the folder with your own one-shots (--kits mine)')
     args = ap.parse_args()
     if args.check:
         return check_bank(os.path.join(args.data, 'bank'))
@@ -304,6 +306,17 @@ def main():
     index_path = os.path.join(bank, 'index.json')
     index = json.load(open(index_path)) if os.path.exists(index_path) else {}
     for kit in args.kits.split(','):
+        if kit == 'mine':                             # read afresh every time, so added sounds are picked up
+            import my_sounds, shutil
+            if not os.path.isdir(args.mine):
+                raise SystemExit(f'Put your own sounds in {args.mine}/ first (see my_sounds.py).')
+            for old in [k for k in index if k.startswith('mine_')]:
+                shutil.rmtree(os.path.join(bank, old), ignore_errors=True)
+                del index[old]
+            print(f'Reading your own sounds from {args.mine}/...')
+            index.update(my_sounds.harvest(bank, args.mine))
+            json.dump(index, open(index_path, 'w'), indent=1)
+            continue
         if any(k == kit or k.startswith(kit + '_') for k in index):
             print(f'{kit} already in the bank.')
             continue

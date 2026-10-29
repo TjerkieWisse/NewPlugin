@@ -40,13 +40,19 @@ def _choose_kit(rng, bank):
     """For every instrument, how to sound it: ('synth', one-shot) or ('acoustic', samples soft..hard).
     Mostly one coherent kit, sometimes with instruments swapped in from elsewhere."""
     made = synth.synth_kit(rng)
-    kit_names = [k for k in bank.kits if k != 'freesound']
-    # Freesound's one-shots (many of them electronic) a third of the time, a recorded kit or our own
-    # synthesised sounds the rest.
-    if 'freesound' in bank.kits and rng.random() < 0.3:
-        base = 'freesound'
+    # Collections of loose one-shots (your own, mine_*, and Freesound's), recorded kits, and our own
+    # synthesised sounds. Your own sounds come first among the one-shots.
+    mine = [k for k in bank.kits if k.startswith('mine_')]
+    loose = mine + [k for k in bank.kits if k == 'freesound']
+    kit_names = [k for k in bank.kits if k not in loose]
+    r = rng.random()
+    if loose and r < 0.4:
+        pool = mine if mine and (len(loose) == len(mine) or rng.random() < 0.7) else [k for k in loose if k not in mine]
+        base = pool[rng.integers(len(pool))]
+    elif kit_names and r < 0.75:
+        base = kit_names[rng.integers(len(kit_names))]
     else:
-        base = kit_names[rng.integers(len(kit_names))] if kit_names and rng.random() < 0.5 else None
+        base = None
     kit = {}
     for inst in patterns.INSTRUMENT_CLASS:
         name = 'toms' if inst.startswith('tom') else inst

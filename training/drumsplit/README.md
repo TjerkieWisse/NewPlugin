@@ -48,6 +48,20 @@ hours), turned into a bank of 1–2 GB in `data/bank`. `--kits stemgmd` fetches 
 (freesound.org/apiv2/apply) and keeps it in `data/freesound_key.txt`. `--delete-downloads` deletes each download once it's converted. Without the kits, the
 examples use synthesised sounds only.
 
+## Your own sounds
+
+Put your own drum one-shots in `my_sounds/` next to this README, one folder per collection, with
+subfolders as you like (`my_sounds/trap/808s/...`, `my_sounds/house/Hats/Open/...`). Then:
+
+```bash
+.venv/bin/python fetch_data.py --kits mine
+```
+
+It reads which instrument each sound is from its folder and file names (kick, 808, snare, clap, rim,
+tom, hat, open hat, crash, ride), checks that it's one clear hit of that kind, and lists what it
+skipped. Run it again after adding sounds. Only use sounds you made or recorded yourself, or have
+the maker's permission to train on: many sample packs forbid it.
+
 ## Training
 
 ```bash
@@ -75,6 +89,7 @@ place of the current split model.
 | Acoustic kits | [StemGMD](https://zenodo.org/records/7882857) single hits: 10 kits (Politecnico di Milano). Its sounds come from Logic Pro's libraries: have a lawyer check this before release | CC BY 4.0 |
 | One-shots, many electronic | [Freesound](https://freesound.org), only sounds their makers released as CC0; `data/bank/freesound/credits.csv` lists each one and its maker | CC0 |
 | Acoustic kits | [DRSKit](https://drumgizmo.org/wiki/doku.php?id=kits:drskit), [MuldjordKit](https://drumgizmo.org/wiki/doku.php?id=kits:muldjordkit), [CrocellKit](https://drumgizmo.org/wiki/doku.php?id=kits:crocellkit) from DrumGizmo | CC BY 4.0 |
+| Your own one-shots (`my_sounds/`) | you | yours |
 | Synthesised sounds, patterns, effects | made by this code | ours |
 | Model code | MDX23C / TFC-TDF v3 as in ZFTurbo's Music-Source-Separation-Training | MIT |
 

@@ -18,8 +18,8 @@ PER_INSTRUMENT = 300     # sounds kept per instrument at most
 # its "brightness" (spectral centroid, Hz) that a sound of that kind falls in.
 SEARCHES = {
     'kick':         (['808 kick', 'kick drum one shot', 'kick'], (0.08, 2.5), (30, 1500)),
-    'snare':        (['snare one shot', 'snare', 'clap', 'handclap'], (0.05, 1.5), (400, 7000)),
-    'rim':          (['rimshot', 'rim shot', 'sidestick'], (0.03, 0.8), (500, 8000)),
+    'snare':        (['snare one shot', 'snare', 'clap', 'handclap'], (0.05, 1.5), (400, 10000)),
+    'rim':          (['rimshot', 'rim shot', 'sidestick'], (0.01, 0.8), (500, 9000)),
     'toms':         (['tom drum', 'floor tom', '808 tom'], (0.1, 2.0), (40, 2500)),
     'hihat_closed': (['closed hihat', 'closed hi-hat', 'hihat closed'], (0.02, 0.6), (3000, 16000)),
     'hihat_open':   (['open hihat', 'open hi-hat'], (0.15, 3.0), (3000, 16000)),
@@ -72,9 +72,9 @@ def candidates(key, inst):
     return list(found.values())
 
 
-def clean(audio, rate, inst):
+def clean(audio, rate, inst, longer=1.2):
     """The sound as a mono one-shot at RATE, starting at its hit and cut where it has died away, or
-    None if it isn't one clear hit of this kind."""
+    None if it isn't one clear hit of this kind (up to `longer` times the usual longest length)."""
     if audio.ndim > 1:
         audio = audio.mean(axis=1)
     if rate != RATE:
@@ -87,20 +87,21 @@ def clean(audio, rate, inst):
     if start > 0.3 * RATE:                            # a long silence before the hit: probably not a one-shot
         return None
     audio = audio[max(0, start - int(0.002 * RATE)):]
-    # One hit: after the loudest moment, the level never jumps back up to near the peak.
+    # One hit: from 50 ms after the loudest moment on, the level never jumps back up to near the peak
+    # (a clap's quick bursts and a flam come before that; a second hit comes after).
     frame = int(0.01 * RATE)
     env = np.sqrt(np.convolve(audio ** 2, np.ones(frame) / frame, mode='valid')[::frame] + 1e-12)
     top = int(np.argmax(env))
     after = env[top:]
     if len(after) > 6:
         low = np.minimum.accumulate(after)
-        if np.any((after[3:] > 0.5 * env[top]) & (after[3:] > 3 * low[:-3])):
+        if np.any((after[5:] > 0.5 * env[top]) & (after[5:] > 3 * low[:-5])):
             return None
     # Cut where it has died away (-60 dB), with a short fade.
     loud = np.nonzero(np.abs(audio) > np.max(np.abs(audio)) * 1e-3)[0]
     audio = audio[:loud[-1] + int(0.01 * RATE)].copy()
     lo, hi = SEARCHES[inst][1]
-    if not lo <= len(audio) / RATE <= hi * 1.2:
+    if not lo <= len(audio) / RATE <= hi * longer:
         return None
     fade = min(len(audio) // 4, int(0.01 * RATE))
     audio[-fade:] *= np.linspace(1, 0, fade)

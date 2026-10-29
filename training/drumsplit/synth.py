@@ -117,12 +117,17 @@ def rim(rng):
 # --- toms -----------------------------------------------------------------------------------------
 
 def tom(rng, f0=None):
-    decay = rng.uniform(0.2, 0.9)
+    """A drum tom, not an 808: a short pitch bend, the drum's second mode (1.5x, the "boing" a real
+    tom has and a sine kick lacks), and a stick attack of filtered noise."""
+    decay = rng.uniform(0.25, 0.9)
     seconds = decay * 1.1
-    f0 = f0 or rng.uniform(70, 300)
-    x = np.sin(_sweep(f0 * rng.uniform(1.3, 2.5), f0, rng.uniform(0.02, 0.1), seconds)) * _env(seconds, decay)
-    x += rng.uniform(0, 0.3) * _filter(rng.standard_normal(len(x)), 'band', (300, 4000)) * _env(seconds, 0.03)
-    return _finish(x, drive=rng.uniform(0, 1.5))
+    f0 = f0 or rng.uniform(80, 280)
+    bend = rng.uniform(1.05, 1.4)
+    x = np.sin(_sweep(f0 * bend, f0, rng.uniform(0.02, 0.08), seconds)) * _env(seconds, decay)
+    x += rng.uniform(0.3, 0.7) * np.sin(_sweep(f0 * 1.5 * bend, f0 * 1.5, 0.03, seconds)) * _env(seconds, decay * 0.5)
+    attack = _filter(rng.standard_normal(len(x)), 'band', (rng.uniform(500, 1500), rng.uniform(3000, 8000)))
+    x += rng.uniform(0.3, 0.8) * attack * _env(seconds, rng.uniform(0.01, 0.04))
+    return _finish(x, drive=rng.uniform(0, 1.0))
 
 
 # --- hi-hat ---------------------------------------------------------------------------------------

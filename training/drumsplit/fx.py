@@ -100,9 +100,9 @@ def reverb(x, ir):
 
 def bus(rng, stems):
     """Bus processing on stems [parts, 2, n]: the same filters and gain curve on every part."""
-    if rng.random() < 0.5:                        # a highpass and/or a lowpass, like mastering or MP3
+    if rng.random() < 0.15:                       # a highpass and/or a lowpass, like mastering or MP3
         lo = rng.uniform(20, 60)
-        hi = rng.uniform(11000, 20000)
+        hi = rng.uniform(14000, 20000)
         sos = signal.butter(2, [lo / (RATE / 2), hi / (RATE / 2)], 'bandpass', output='sos')
         stems = signal.sosfilt(sos, stems, axis=-1)
     if rng.random() < 0.7:                        # bus compressor or limiter, driven by the mix

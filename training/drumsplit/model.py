@@ -26,10 +26,18 @@ def spectrogram(audio, dim_f):
 
 
 def loss_fn(predicted, mix_spec, parts, dim_f):
-    """L1 between the predicted and true part spectrograms, on the complex values and on the
-    magnitudes. predicted [b, parts, 4, dim_f, frames]; parts [b, parts, 2, samples]."""
+    """How far the predicted parts are from the true ones. predicted [b, parts, 4, dim_f, frames];
+    parts [b, parts, 2, samples].
+
+    Two halves: the difference in the complex values (so the waveforms match), relative to the
+    example's level, and the difference in loudness on a log scale, as we hear it, down to 80 dB
+    below the example's loudest point. On the plain scale the treble and quiet bleed hardly count
+    next to the bass; on the log scale a dull hi-hat or a bit of snare in the kick does."""
     b, p, c, n = parts.shape
     target = spectrogram(parts.reshape(b * p, c, n), dim_f).reshape(predicted.shape)
-    complex_l1 = (predicted - target).abs().mean()
-    mag = lambda s: torch.sqrt(s[:, :, 0::2] ** 2 + s[:, :, 1::2] ** 2 + 1e-8)
-    return complex_l1 + (mag(predicted) - mag(target)).abs().mean()
+    mag = lambda s: torch.sqrt(s[:, :, 0::2] ** 2 + s[:, :, 1::2] ** 2 + 1e-12)
+    level = mix_spec.abs().mean(dim=(1, 2, 3)).view(b, 1, 1, 1, 1) + 1e-8
+    complex_l1 = ((predicted - target).abs() / level).mean()
+    floor = mag(mix_spec[:, None]).amax(dim=(2, 3, 4), keepdim=True) * 1e-4
+    log_l1 = (torch.log(mag(predicted) + floor) - torch.log(mag(target) + floor)).abs().mean()
+    return complex_l1 + log_l1

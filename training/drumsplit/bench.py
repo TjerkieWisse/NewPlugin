@@ -14,8 +14,8 @@ os.environ.setdefault('PYTORCH_MPS_LOW_WATERMARK_RATIO', '0.5')
 import numpy as np, torch
 import model as M
 
-# A full training run, as examples seen: 300,000 segments of 3 s, about 250 hours of drums.
-FULL_RUN_EXAMPLES = 300_000
+# A full training run: about 250 hours of drums heard (300,000 pieces of 3 s, or 150,000 of 6 s).
+FULL_RUN_HOURS = 250
 
 lines = []
 
@@ -90,8 +90,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--data', default='data')
     ap.add_argument('--steps', type=int, default=15)
-    ap.add_argument('--sizes', default='small,medium,large')
-    ap.add_argument('--batches', default='2,4,8')
+    ap.add_argument('--sizes', default='large,large2,xlarge')
+    ap.add_argument('--batches', default='1,2,4')
     args = ap.parse_args()
 
     device = torch.device('mps' if torch.backends.mps.is_available() else 'cuda' if torch.cuda.is_available() else 'cpu')
@@ -113,7 +113,7 @@ def main():
     say(f'\nExamples: {per_example * 1000:.0f} ms each on one core, about {workers / per_example:.0f} per second with {workers} workers')
 
     # 2. Training speed per model size and batch size.
-    say('\nsize    params  batch  precision  s/step  examples/s  GPU memory  full run (300k examples)')
+    say('\nsize    params  batch  precision  s/step  examples/s  GPU memory  full run (250 h of drums)')
     results = []
     for size in args.sizes.split(','):
         cfg = M.load_config(os.path.join('configs', size + '.yaml'))
@@ -127,7 +127,7 @@ def main():
                     free_memory(device)
                     continue
                 rate = batch / seconds
-                hours = FULL_RUN_EXAMPLES / rate / 3600
+                hours = FULL_RUN_HOURS * 3600 / (M.frames_to_samples(cfg['audio']['dim_t']) / 44100) / rate / 3600
                 results.append((hours, size, batch, half, mem))
                 memory = f'{mem:8.1f} GB' if mem == mem else '       -   '
                 say(f'{size:7} {params:5.1f}M  {batch:5}  {"fp16" if half else "fp32":9}  {seconds:6.2f}  {rate:10.1f}  {memory}  {hours:6.1f} h ({hours / 24:.1f} days)')

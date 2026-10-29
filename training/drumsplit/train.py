@@ -59,7 +59,8 @@ def main():
     ap.add_argument('--run', default=None, help='folder for checkpoints and logs (default: runs/<config name>)')
     ap.add_argument('--batch', type=int, default=2)
     ap.add_argument('--accum', type=int, default=2, help='batches added up per update')
-    ap.add_argument('--examples', type=int, default=300_000, help='examples to train on in total')
+    ap.add_argument('--examples', type=int, default=None,
+                    help='examples to train on in total (default: 250 hours of drums, whatever the piece length)')
     ap.add_argument('--lr', type=float, default=3e-4)
     ap.add_argument('--workers', type=int, default=3)
     ap.add_argument('--fp32', action='store_true', help='train in full precision (slower)')
@@ -74,6 +75,7 @@ def main():
     cfg = M.load_config(args.config)
     dim_f, dim_t = cfg['audio']['dim_f'], cfg['audio']['dim_t']
     seconds = M.frames_to_samples(dim_t) / G.RATE
+    args.examples = args.examples or int(250 * 3600 / seconds)
 
     net = M.Net(cfg)
     if net.mask:                                      # every part starts as an equal share of the mix

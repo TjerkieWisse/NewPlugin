@@ -51,6 +51,9 @@ class Net(nn.Module):
         # 'mask': the network gives each part a complex mask that is applied to the input (KITNAP's own
         # models). Otherwise it gives the parts' spectrograms directly (jarredou's DrumSep).
         self.mask = m.get('output') == 'mask'
+        # normalize: true scales the input to a fixed level before the network (the masks still apply
+        # to the input as it is), which keeps the network's numbers in a stable range at any loudness.
+        self.normalize = str(m.get('normalize', '')).lower() == 'true'
         dim_c = self.k * a['num_channels'] * 2
         n, scale, l, c, g, bn = m['num_scales'], m['scale'], m['num_blocks_per_scale'], m['num_channels'], m['growth'], m['bottleneck_factor']
         f = a['dim_f'] // self.k
@@ -77,6 +80,8 @@ class Net(nn.Module):
     # it with center=True and a periodic Hann window. Returns [1, stems, 4, dim_f, dim_t].
     def forward(self, x):
         spec = x
+        if self.normalize:
+            x = x / (torch.sqrt(torch.mean(x * x, dim=(1, 2, 3), keepdim=True)) + 1e-5)
         b, c, f, t = x.shape
         mix = x = x.reshape(b, c, self.k, f // self.k, t).reshape(b, c * self.k, f // self.k, t)
         first = x = self.first_conv(x)

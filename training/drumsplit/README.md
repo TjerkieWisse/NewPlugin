@@ -65,8 +65,12 @@ the maker's permission to train on: many sample packs forbid it.
 ## Training
 
 ```bash
-.venv/bin/python train.py                         # the large model, about 15 hours on an M5
+.venv/bin/python train.py --config configs/large2.yaml      # round 2: about the same size as round 1
+.venv/bin/python train.py --config configs/xlarge.yaml      # round 2, about twice as big and slower
 ```
+
+Each run goes into `runs/<config name>/`. The round-2 configs (`large2`, `xlarge`) level the input
+inside the model, so fp16 stays stable, and train on 6-second pieces; `bench.py` times them all.
 
 It prints its progress every 50 updates and checks itself every 1000 (how close each part comes to
 the truth, in dB: higher is better). Press **Ctrl+C** to stop: it saves first. Run the same command
@@ -78,7 +82,7 @@ To hear how it's doing at any point, split a drum stem with the best version so 
 .venv/bin/python split.py "path/to/drums.wav"     # writes the five parts next to it
 ```
 
-When it's done, `export.py` makes `runs/large/kitnap_drumsep5.onnx`, the file the plugin loads in
+When it's done, `export.py --run runs/<config name>` makes `kitnap_drumsep5.onnx` there,, the file the plugin loads in
 place of the current split model.
 
 ## Data and licences

@@ -62,6 +62,9 @@ def _choose_kit(rng, bank):
         elif base is not None and rng.random() < 0.15:
             source = None
         options = bank.kits.get(source, {}).get(inst) if source else None
+        if not options and inst.startswith('tom') and source:   # no toms here: a recorded kit's, not a synthesised one
+            having = [k for k in kit_names if bank.kits[k].get(inst)]
+            options = bank.kits[having[rng.integers(len(having))]][inst] if having else None
         if options:
             room = fx.db(rng.uniform(-18, 3)) if rng.random() < 0.8 else 0.0
             kit[inst] = ('acoustic', (options[rng.integers(len(options))], room))

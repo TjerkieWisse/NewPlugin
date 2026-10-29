@@ -33,14 +33,25 @@ SEARCH_NAME = {'snare': 'snare', 'rim': 'rim', 'toms': 'toms', 'kick': 'kick', '
                'hihat_closed': 'hihat_closed', 'crash': 'crash', 'ride': 'ride'}
 
 
-def kind_of(path):
-    """The instrument a file is, from its folder and file names, or None."""
-    words = re.findall(r'[a-z]+|\d+[a-z]*', path.lower())
+def _kind_in(name):
+    words = re.findall(r'[a-z]+|\d+[a-z]*', name.lower())
     text = ''.join(words)
     def has(tokens):
         return any(w in tokens for w in words) or any(len(t) > 3 and t in text for t in tokens)
     for kind, tokens, also in KINDS:
         if has(tokens) and (also is None or has(also)):
+            return kind
+    return None
+
+
+def kind_of(path):
+    """The instrument a file is, or None: from its own name if that says, otherwise from the folder
+    it's in, then the one above, and so on (so 'Kicks & Snares/Kick 1.wav' is a kick)."""
+    parts = path.replace('\\', '/').split('/')
+    parts[-1] = os.path.splitext(parts[-1])[0]
+    for name in reversed(parts):
+        kind = _kind_in(name)
+        if kind:
             return kind
     return None
 
@@ -53,7 +64,7 @@ def harvest(bank, folder):
         if not os.path.isdir(root) or collection.startswith('.'):
             continue
         name = 'mine_' + re.sub(r'\W+', '_', collection.lower()).strip('_')
-        kept, skipped, rejected = {}, [], []
+        kept, skipped, rejected, origins = {}, [], [], {}
         for here, _, files in os.walk(root):
             for f in sorted(files):
                 if not f.lower().endswith(AUDIO) or f.startswith('.'):
@@ -79,6 +90,9 @@ def harvest(bank, folder):
                 os.makedirs(os.path.join(bank, name, kind), exist_ok=True)
                 sf.write(os.path.join(bank, rel), audio, freesound.RATE, subtype='PCM_24')
                 kept.setdefault(kind, []).append((centroid, rel))
+                origin = os.path.dirname(rel_in) or '.'
+                origins.setdefault(kind, {})
+                origins[kind][origin] = origins[kind].get(origin, 0) + 1
         entries = {}
         for kind, sounds in kept.items():
             if kind == 'toms':                        # high, mid and low toms by brightness
@@ -91,6 +105,9 @@ def harvest(bank, folder):
         index[name] = entries
         print(f'  {name}: ' + ', '.join(f'{k} {len(v)}' for k, v in sorted(kept.items())) +
               f'; {len(skipped)} skipped (name not recognised), {len(rejected)} rejected by the checks', flush=True)
+        for kind, folders in sorted(origins.items()):     # where each instrument's sounds came from
+            top = sorted(folders.items(), key=lambda f: -f[1])[:4]
+            print(f'    {kind} from: ' + '; '.join(f'{folder} ({n})' for folder, n in top), flush=True)
         for label, items in (('not recognised', skipped), ('rejected', rejected)):
             if items:
                 print(f'    {label}, for example: ' + '; '.join(items[:8]), flush=True)

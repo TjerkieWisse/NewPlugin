@@ -4,7 +4,9 @@
 # KITNAP runs.
 #
 # Usage: python train.py [--config configs/large.yaml] [--run runs/large] [--batch 2] [--accum 2]
-#                        [--examples 300000] [--workers 3]
+#                        [--examples 300000] [--workers 3] [--fp32] [--from-best]
+# If fp16 keeps running out of range (NaN), it carries on in full precision by itself; if the weights
+# themselves go bad, it goes back to the best version. --from-best does that on request.
 import argparse, copy, csv, math, os, signal, time
 os.environ.setdefault('PYTORCH_ENABLE_MPS_FALLBACK', '1')
 # Keep the GPU to 70% of the memory macOS recommends (see bench.py), so the Mac never has to swap.
@@ -61,6 +63,8 @@ def main():
     ap.add_argument('--lr', type=float, default=3e-4)
     ap.add_argument('--workers', type=int, default=3)
     ap.add_argument('--fp32', action='store_true', help='train in full precision (slower)')
+    ap.add_argument('--from-best', action='store_true',
+                    help='go back to the best version so far and carry on from there (after a run went wrong)')
     ap.add_argument('--seed', type=int, default=0)
     args = ap.parse_args()
 
@@ -85,6 +89,14 @@ def main():
     updates = math.ceil(args.examples / (args.batch * args.accum))
     step, best = 0, -1e9
 
+    def restore_best():
+        """Goes back to the best version so far (when the weights have gone bad, or with --from-best)."""
+        good = torch.load(os.path.join(run, 'best.pt'), map_location='cpu', weights_only=True)
+        net.load_state_dict(good['ema']); ema.load_state_dict(good['ema'])
+        opt.state.clear()
+        print(f'Carrying on from the best version so far, update {good["step"]}.', flush=True)
+        return good['step']
+
     last = os.path.join(run, 'last.pt')
     if os.path.exists(last):
         state = torch.load(last, map_location='cpu', weights_only=True)
@@ -94,14 +106,20 @@ def main():
         net.load_state_dict(state['model']); ema.load_state_dict(state['ema'])
         opt.load_state_dict(state['opt']); scaler.load_state_dict(state['scaler'])
         step, best = state['step'], state['best']
-        print(f'Carrying on from update {step} of {updates}.')
+        if not state.get('half', True) and half:          # it already had to leave fp16 behind
+            half = False
+            scaler = torch.amp.GradScaler(device.type, enabled=False)
+        print(f'Carrying on from update {step} of {updates}{"" if half else " in full precision"}.')
+        if args.from_best or not all(torch.isfinite(p).all() for p in net.parameters()):
+            step = restore_best()
     else:
         print(f'Starting: {sum(p.numel() for p in net.parameters()) / 1e6:.1f}M parameters, {updates} updates '
               f'of {args.batch * args.accum} examples, on {device}{" in fp16" if half else ""}.')
 
     def save(path, extra=None):
         state = {'model': net.state_dict(), 'ema': ema.state_dict(), 'opt': opt.state_dict(),
-                 'scaler': scaler.state_dict(), 'step': step, 'best': best, 'config': args.config, 'output': output}
+                 'scaler': scaler.state_dict(), 'step': step, 'best': best, 'config': args.config, 'output': output,
+                 'half': half}
         torch.save(state | (extra or {}), path + '.tmp')
         os.replace(path + '.tmp', path)               # never a half-written checkpoint
 
@@ -141,9 +159,11 @@ def main():
 
     batches = iter(loader)
     started, saved_at, running = time.time(), time.time(), []
+    bad_in_a_row, skipped, restores = 0, 0, 0
     while step < updates and not stop:
         for g in opt.param_groups:
             g['lr'] = lr_at(step)
+        finite = True
         for _ in range(args.accum):
             mix, parts = next(batches)
             mix, parts = mix.to(device), parts.to(device)
@@ -151,8 +171,29 @@ def main():
             with torch.autocast(device.type, dtype=torch.float16, enabled=half):
                 out = net(spec)
             loss = M.loss_fn(out.float(), spec, parts, dim_f) / args.accum
+            if not torch.isfinite(loss):              # a number ran out of range (NaN): skip this update
+                finite = False
+                break
             scaler.scale(loss).backward()
             running.append(loss.item() * args.accum)
+        if not finite:
+            opt.zero_grad(set_to_none=True)
+            bad_in_a_row += 1
+            skipped += 1
+            if bad_in_a_row >= 20 and half:           # fp16 keeps overflowing: carry on in full precision
+                half = False
+                scaler = torch.amp.GradScaler(device.type, enabled=False)
+                print('  fp16 kept running out of range; carrying on in full precision (a bit slower).', flush=True)
+                bad_in_a_row = 0
+            elif bad_in_a_row >= 20:                  # even full precision fails: the weights went bad
+                restores += 1
+                if restores > 3:
+                    raise SystemExit('Training keeps going wrong (NaN) even after going back to the best version. '
+                                     'Stopped; send the last lines above.')
+                step = restore_best()
+                bad_in_a_row = 0
+            continue
+        bad_in_a_row = 0
         scaler.unscale_(opt)
         torch.nn.utils.clip_grad_norm_(net.parameters(), 5.0)
         scaler.step(opt)
@@ -169,8 +210,8 @@ def main():
             rate = 50 * args.batch * args.accum / (time.time() - started)
             left = (updates - step) * args.batch * args.accum / rate / 3600
             print(f'update {step}/{updates}  loss {np.mean(running):.4f}  {rate:.1f} examples/s  '
-                  f'about {left:.1f} h to go', flush=True)
-            started, running = time.time(), []
+                  f'about {left:.1f} h to go' + (f'  ({skipped} batches skipped)' if skipped else ''), flush=True)
+            started, running, skipped = time.time(), [], 0
         if step % 1000 == 0 or step == updates:
             val_loss, part_db = validate()
             print('  check: loss %.4f, ' % val_loss + ', '.join(f'{p} {d:.1f} dB' for p, d in zip(PARTS, part_db)), flush=True)

@@ -7,6 +7,7 @@
 #                        [--examples 300000] [--workers 3] [--fp32] [--from-best]
 # If fp16 keeps running out of range (NaN), it carries on in full precision by itself; if the weights
 # themselves go bad, it goes back to the best version. --from-best does that on request.
+# If the GPU's memory runs short (it fragments over a long run), it clears it and carries on.
 import argparse, copy, csv, math, os, signal, time
 os.environ.setdefault('PYTORCH_ENABLE_MPS_FALLBACK', '1')
 # Keep the GPU to 70% of the memory macOS recommends (see bench.py), so the Mac never has to swap.
@@ -42,6 +43,18 @@ class Stream(torch.utils.data.IterableDataset):
         info = torch.utils.data.get_worker_info()
         for mix, parts in G.Examples(self.data, self.seconds, seed=self.seed, stream=info.id if info else 0):
             yield torch.from_numpy(mix), torch.from_numpy(parts)
+
+
+def free_memory(device):
+    """Hands the GPU memory PyTorch keeps cached back, so it can't fragment into pieces too small to use."""
+    if device.type == 'mps':
+        torch.mps.empty_cache()
+    elif device.type == 'cuda':
+        torch.cuda.empty_cache()
+
+
+def out_of_memory(error):
+    return isinstance(error, getattr(torch, 'OutOfMemoryError', ())) or 'out of memory' in str(error)
 
 
 def part_snr(predicted, target_spec):
@@ -131,9 +144,9 @@ def main():
     def validate():
         totals, loss = torch.zeros(len(PARTS)), 0.0
         with torch.no_grad():
-            for i in range(0, len(validation), 4):
-                mix = torch.from_numpy(np.stack([v[0] for v in validation[i:i + 4]])).to(device)
-                parts = torch.from_numpy(np.stack([v[1] for v in validation[i:i + 4]])).to(device)
+            for i in range(0, len(validation), args.batch):   # no bigger than training, to fit in memory
+                mix = torch.from_numpy(np.stack([v[0] for v in validation[i:i + args.batch]])).to(device)
+                parts = torch.from_numpy(np.stack([v[1] for v in validation[i:i + args.batch]])).to(device)
                 spec = M.spectrogram(mix, dim_f)
                 with torch.autocast(device.type, dtype=torch.float16, enabled=half):
                     out = ema(spec)
@@ -142,7 +155,8 @@ def main():
                 b, p, c, n = parts.shape
                 target = M.spectrogram(parts.reshape(b * p, c, n), dim_f).reshape(out.shape)
                 totals += part_snr(out, target).cpu()
-        return loss / (len(validation) / 4), totals / (len(validation) / 4)
+        chunks = math.ceil(len(validation) / args.batch)
+        return loss / chunks, totals / chunks
 
     # Every start draws new examples, so a resumed run doesn't repeat the ones it already saw.
     loader = torch.utils.data.DataLoader(Stream(args.data, seconds, seed=args.seed * 1_000_003 + step),
@@ -161,23 +175,42 @@ def main():
 
     batches = iter(loader)
     started, saved_at, running = time.time(), time.time(), []
-    bad_in_a_row, skipped, restores = 0, 0, 0
+    bad_in_a_row, skipped, restores, short_of_memory = 0, 0, 0, 0
     while step < updates and not stop:
         for g in opt.param_groups:
             g['lr'] = lr_at(step)
-        finite = True
-        for _ in range(args.accum):
-            mix, parts = next(batches)
-            mix, parts = mix.to(device), parts.to(device)
-            spec = M.spectrogram(mix, dim_f)
-            with torch.autocast(device.type, dtype=torch.float16, enabled=half):
-                out = net(spec)
-            loss = M.loss_fn(out.float(), spec, parts, dim_f) / args.accum
-            if not torch.isfinite(loss):              # a number ran out of range (NaN): skip this update
-                finite = False
-                break
-            scaler.scale(loss).backward()
-            running.append(loss.item() * args.accum)
+        finite, memory_ran_out = True, False
+        try:
+            for _ in range(args.accum):
+                mix, parts = next(batches)
+                mix, parts = mix.to(device), parts.to(device)
+                spec = M.spectrogram(mix, dim_f)
+                with torch.autocast(device.type, dtype=torch.float16, enabled=half):
+                    out = net(spec)
+                loss = M.loss_fn(out.float(), spec, parts, dim_f) / args.accum
+                if not torch.isfinite(loss):          # a number ran out of range (NaN): skip this update
+                    finite = False
+                    break
+                scaler.scale(loss).backward()
+                running.append(loss.item() * args.accum)
+        except RuntimeError as e:
+            if not out_of_memory(e):
+                raise
+            memory_ran_out = True
+        if memory_ran_out:
+            # The GPU memory has fragmented: clear it out (once the error, which holds on to this batch, is
+            # gone) and try this update again with new examples.
+            mix = parts = spec = out = loss = None
+            opt.zero_grad(set_to_none=True)
+            free_memory(device)
+            short_of_memory += 1
+            if short_of_memory >= 5:
+                save(last)
+                raise SystemExit('The GPU keeps running out of memory; progress saved. Close other apps and run the '
+                                 'same command again, or use a smaller --batch.')
+            print('  GPU memory ran short; cleared it and carrying on.', flush=True)
+            continue
+        short_of_memory = 0
         if not finite:
             opt.zero_grad(set_to_none=True)
             bad_in_a_row += 1
@@ -214,8 +247,11 @@ def main():
             print(f'update {step}/{updates}  loss {np.mean(running):.4f}  {rate:.1f} examples/s  '
                   f'about {left:.1f} h to go' + (f'  ({skipped} batches skipped)' if skipped else ''), flush=True)
             started, running, skipped = time.time(), [], 0
+            free_memory(device)
         if step % 1000 == 0 or step == updates:
+            free_memory(device)
             val_loss, part_db = validate()
+            free_memory(device)
             print('  check: loss %.4f, ' % val_loss + ', '.join(f'{p} {d:.1f} dB' for p, d in zip(PARTS, part_db)), flush=True)
             writer.writerow([step, step * args.batch * args.accum, '', f'{val_loss:.5f}'] + [f'{d:.2f}' for d in part_db])
             log.flush()

@@ -1,0 +1,34 @@
+# KITNAP drum split model at the size of jarredou's DrumSep (128 channels, 109M parameters): too big
+# for a laptop, for a rented GPU (see README). Input levelled, 6-second training pieces. Same layout
+# as jarredou's DrumSep config, so tools/export_drumsep.py exports it. dim_t is the training segment
+# in frames: 512 = 5.9 s.
+audio:
+  dim_f: 1024
+  dim_t: 512
+  hop_length: 512
+  n_fft: 2048
+  num_channels: 2
+  sample_rate: 44100
+
+model:
+  act: gelu
+  bottleneck_factor: 4
+  growth: 128
+  norm: InstanceNorm
+  output: mask        # parts as masks on the input; see tools/export_drumsep.py
+  normalize: true     # the input is levelled before the network: stable in fp16
+  num_blocks_per_scale: 2
+  num_channels: 128
+  num_scales: 5
+  num_subbands: 4
+  scale:
+  - 2
+  - 2
+
+training:
+  instruments:
+  - kick
+  - snare
+  - toms
+  - hh
+  - cymbals

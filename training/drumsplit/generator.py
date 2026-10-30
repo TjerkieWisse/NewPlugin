@@ -4,11 +4,17 @@
 # each part mixed with its own EQ, compression, saturation, panning and reverb, the whole kit through
 # a bus compressor or limiter, and sometimes a little of other instruments left in the mix, the way a
 # drum stem pulled out of a song has some.
+#
+# A third of the examples, when multitrack.py has fetched them, start instead from a real drummer's
+# multitrack recording (StemGMD), sped up or slowed down a little, sometimes with one part swapped for
+# another recording's or left out; then the same mixing as the rest.
 import json, os, sys, functools, numpy as np, soundfile as sf
-import fx, patterns, synth
+from scipy import signal
+import fx, multitrack, patterns, synth
 
 RATE = 44100
 CLASSES = synth.CLASSES
+MULTITRACK_SHARE = 0.35                # real recordings are acoustic: leave room for electronic kits
 
 
 class Bank:
@@ -107,9 +113,42 @@ def _residue(rng, n):
     return fx.pan(out / (np.max(np.abs(out)) + 1e-9), rng.uniform(-0.3, 0.3))
 
 
-def make_example(rng, grooves, bank, seconds):
-    """One training example: mix [2, n] and parts [5, 2, n], float32."""
+def _multitrack_parts(rng, multitracks, n, held_out):
+    """Parts [5, 2, n] from the real multitracks: a stretch of one recording, at 0.9-1.1x speed half
+    the time (tempo and pitch together, like a tape), sometimes with one part from another recording
+    or one part left out, so the model can't count on the parts going together."""
+    def excerpt():
+        if rng.random() < 0.5:
+            k = int(rng.integers(90, 111))                # speed in percent
+            x = multitracks.read(rng, n * k // 100 + 64, held_out)
+            return signal.resample_poly(x, 100, k, axis=-1)[..., :n]
+        return multitracks.read(rng, n, held_out).astype(np.float64)
+    for _ in range(5):                                # skip stretches of silence
+        parts = excerpt()
+        if np.sqrt(np.mean(parts.sum(0) ** 2)) > 1e-4:
+            break
+    if rng.random() < 0.25:
+        c = rng.integers(len(CLASSES))
+        parts[c] = excerpt()[c]
+    if rng.random() < 0.1:
+        parts[rng.integers(len(CLASSES))] = 0
+    return parts
+
+
+def make_example(rng, grooves, bank, seconds, multitracks=None, held_out=False):
+    """One training example: mix [2, n] and parts [5, 2, n], float32. held_out takes the multitracks
+    kept apart for checking."""
     n = int(round(seconds * RATE))
+    real = multitracks is not None and multitracks.available(held_out) and rng.random() < MULTITRACK_SHARE
+    if real:
+        stems = _multitrack_parts(rng, multitracks, n, held_out)
+    else:
+        stems = _render(rng, grooves, bank, n, seconds)
+    return _mix(rng, stems, n, real)
+
+
+def _render(rng, grooves, bank, n, seconds):
+    """Parts [5, 2, n] played from a groove on a kit of one-shots."""
     if grooves and rng.random() < 0.5:
         hits = patterns.groove_excerpt(rng, grooves, seconds)
     else:
@@ -137,13 +176,22 @@ def make_example(rng, grooves, bank, seconds):
         length = min(audio.shape[-1], n - start)
         if length > 0:
             stems[CLASSES.index(patterns.INSTRUMENT_CLASS[inst]), :, start:start + length] += audio[:, :length]
+    return stems
 
+
+def _mix(rng, stems, n, real):
+    """Mixes the parts: levels, EQ, compression, saturation, width, a shared room, the bus, residue of
+    other instruments, and the overall level. A real recording keeps its own balance half the time."""
+    natural = real and rng.random() < 0.5
     room = fx.random_reverb_ir(rng) if rng.random() < 0.6 else None
     for c in range(len(CLASSES)):
         x = stems[c]
         if not np.any(x):
             continue
-        x = x / (np.max(np.abs(x)) + 1e-9) * fx.db(rng.uniform(-10, 0))
+        if natural:
+            x = x * fx.db(rng.uniform(-4, 4))
+        else:
+            x = x / (np.max(np.abs(x)) + 1e-9) * fx.db(rng.uniform(-10, 0))
         if rng.random() < 0.7:
             x = fx.random_eq(rng, x)
         if rng.random() < 0.4:
@@ -171,12 +219,13 @@ class Examples:
     """Endless examples for training. Pass a torch worker's id as `stream` so every worker draws
     different ones; the same seed and stream always give the same examples."""
 
-    def __init__(self, data_folder, seconds, seed=0, stream=0):
+    def __init__(self, data_folder, seconds, seed=0, stream=0, held_out=False):
         self.grooves = patterns.load_groove_midi(os.path.join(data_folder, 'groove'))
         self.bank = Bank(os.path.join(data_folder, 'bank'))
-        self.seconds = seconds
+        self.multitracks = multitrack.Multitracks(data_folder)
+        self.seconds, self.held_out = seconds, held_out
         self.rng = np.random.default_rng([seed, stream])
 
     def __iter__(self):
         while True:
-            yield make_example(self.rng, self.grooves, self.bank, self.seconds)
+            yield make_example(self.rng, self.grooves, self.bank, self.seconds, self.multitracks, self.held_out)

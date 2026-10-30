@@ -8,7 +8,7 @@
 # If fp16 keeps running out of range (NaN), it carries on in full precision by itself; if the weights
 # themselves go bad, it goes back to the best version. --from-best does that on request.
 # If the GPU's memory runs short (it fragments over a long run), it clears it and carries on.
-import argparse, copy, csv, math, os, signal, time
+import argparse, copy, csv, hashlib, math, os, signal, time
 os.environ.setdefault('PYTORCH_ENABLE_MPS_FALLBACK', '1')
 # Keep the GPU to 70% of the memory macOS recommends (see bench.py), so the Mac never has to swap.
 os.environ.setdefault('PYTORCH_MPS_HIGH_WATERMARK_RATIO', '0.7')
@@ -83,6 +83,9 @@ def main():
     args = ap.parse_args()
 
     device = torch.device('mps' if torch.backends.mps.is_available() else 'cuda' if torch.cuda.is_available() else 'cpu')
+    if device.type == 'cuda':                         # NVIDIA: let it pick its fastest kernels
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cuda.matmul.allow_tf32 = torch.backends.cudnn.allow_tf32 = True
     run = args.run or os.path.join('runs', os.path.splitext(os.path.basename(args.config))[0])
     os.makedirs(run, exist_ok=True)
     cfg = M.load_config(args.config)
@@ -103,6 +106,7 @@ def main():
     scaler = torch.amp.GradScaler(device.type, enabled=half)
     updates = math.ceil(args.examples / (args.batch * args.accum))
     step, best = 0, -1e9
+    state_check_set = [None]
 
     def restore_best():
         """Goes back to the best version so far (when the weights have gone bad, or with --from-best)."""
@@ -121,6 +125,7 @@ def main():
         net.load_state_dict(state['model']); ema.load_state_dict(state['ema'])
         opt.load_state_dict(state['opt']); scaler.load_state_dict(state['scaler'])
         step, best = state['step'], state['best']
+        state_check_set[0] = state.get('check_set', 'unknown')
         if not state.get('half', True) and half:          # it already had to leave fp16 behind
             half = False
             scaler = torch.amp.GradScaler(device.type, enabled=False)
@@ -134,12 +139,21 @@ def main():
     def save(path, extra=None):
         state = {'model': net.state_dict(), 'ema': ema.state_dict(), 'opt': opt.state_dict(),
                  'scaler': scaler.state_dict(), 'step': step, 'best': best, 'config': args.config, 'output': output,
-                 'half': half}
+                 'half': half, 'check_set': check_set}
         torch.save(state | (extra or {}), path + '.tmp')
         os.replace(path + '.tmp', path)               # never a half-written checkpoint
 
-    # A fixed set of examples to check progress on, the same every time.
-    validation = [next(e) for e in [iter(G.Examples(args.data, seconds, seed=987654))] for _ in range(48)]
+    # A fixed set of examples to check progress on, the same every time: a third of them, once
+    # multitrack.py has fetched them, from real recordings the model never trains on. When new training
+    # material changes this set, its scores can't be compared with earlier ones: the best starts afresh.
+    validation = [next(e) for e in [iter(G.Examples(args.data, seconds, seed=987654, held_out=True))] for _ in range(48)]
+    check_set = hashlib.sha1(b''.join(v[0][:, ::997].tobytes() for v in validation)).hexdigest()[:12]
+    earlier = state_check_set[0]
+    if earlier == 'unknown':                          # saved before this was kept: it had only made-up examples
+        earlier = 'other' if G.multitrack.Multitracks(args.data).available(held_out=True) else check_set
+    if earlier is not None and earlier != check_set:
+        best = -1e9
+        print('The check examples changed (new training material), so the best score starts afresh.')
 
     def validate():
         totals, loss = torch.zeros(len(PARTS)), 0.0

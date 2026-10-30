@@ -4,13 +4,14 @@
 #                 kits (Politecnico di Milano, CC BY 4.0; 200 MB), three DrumGizmo kits (CC BY 4.0),
 #                 and CC0 one-shots from Freesound (needs a free API key; see freesound.py)
 #   and with --kits mine, your own one-shots from my_sounds/ (see my_sounds.py)
+#   data/multitrack/  with --multitrack HOURS, real drum multitracks from StemGMD (see multitrack.py)
 #
 # The DrumGizmo kits are recorded on up to 16 microphones. For every hit this keeps two stereo
 # mixdowns, the close microphones and the room (overheads and ambience), so the generator can blend
 # them differently every time. Downloads resume if interrupted.
 #
 # Usage: python fetch_data.py [--data data] [--groove-only] [--kits stemgmd,freesound,drs,muldjord,crocell]
-#                             [--delete-downloads] [--check]
+#                             [--delete-downloads] [--check] [--multitrack HOURS]
 #   --check reads every sound in the bank once and drops any that can't be read.
 import argparse, io, json, os, re, sys, urllib.error, urllib.request, zipfile
 import xml.etree.ElementTree as ET
@@ -292,6 +293,8 @@ def main():
     ap.add_argument('--delete-downloads', action='store_true')
     ap.add_argument('--check', action='store_true')
     ap.add_argument('--mine', default='my_sounds', help='the folder with your own one-shots (--kits mine)')
+    ap.add_argument('--multitrack', type=float, default=None, metavar='HOURS',
+                    help="fetch only this many hours of StemGMD's real drum multitracks (see multitrack.py)")
     args = ap.parse_args()
     if args.check:
         return check_bank(os.path.join(args.data, 'bank'))
@@ -301,6 +304,9 @@ def main():
     fetch_groove(args.data, downloads)
     if args.groove_only:
         return
+    if args.multitrack is not None:
+        import multitrack
+        return multitrack.fetch(args.data, args.multitrack)
 
     bank = os.path.join(args.data, 'bank')
     index_path = os.path.join(bank, 'index.json')

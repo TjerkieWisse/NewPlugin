@@ -13,7 +13,7 @@
 # on. Stop it any time with Ctrl+C; run it again to carry on, or with more hours to add more.
 #
 # Usage: python multitrack.py [--data data] [--hours 20]   (or: fetch_data.py --multitrack 20)
-import argparse, csv, io, json, os, random, shutil, struct, threading, time, urllib.error, urllib.request, zlib
+import argparse, csv, http.client, io, json, os, random, shutil, struct, threading, time, urllib.error, urllib.request, zlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np, soundfile as sf
 
@@ -27,14 +27,18 @@ PIECES = [f'https://zenodo.org/api/records/7860223/files/StemGMD.z{i:02d}/conten
 PIECE_SIZE = 31138512896
 CONTENTS = (6, 24691683826, 16216552)         # where the table of contents is: piece, offset, length
 HELD_OUT_HOURS = 0.5
+# When Zenodo says to slow down (too many requests), every download waits until then, not just one.
+pause = {'until': 0.0}
 
 
-def fetch_range(piece, start, length, tries=6):
-    """Bytes [start, start + length) of one archive piece, carrying on into the next piece if needed."""
+def fetch_range(piece, start, length, tries=10):
+    """Bytes [start, start + length) of one archive piece, carrying on into the next piece if needed.
+    Tries again on a dropped connection or when Zenodo asks to slow down, waiting longer each time."""
     out = []
     while length > 0:
         end = start + length if piece == len(PIECES) - 1 else min(start + length, PIECE_SIZE)
         for attempt in range(tries):
+            time.sleep(max(0.0, pause['until'] - time.time()))
             try:
                 request = urllib.request.Request(PIECES[piece], headers={'Range': f'bytes={start}-{end - 1}'})
                 with urllib.request.urlopen(request, timeout=120) as response:
@@ -44,10 +48,17 @@ def fetch_range(piece, start, length, tries=6):
                 if len(data) != end - start:
                     raise IOError(f'got {len(data)} of {end - start} bytes')
                 break
-            except (urllib.error.URLError, OSError) as e:
+            except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
                 if attempt == tries - 1:
-                    raise IOError(f'Zenodo download failed: {e}') from e
-                time.sleep(2 ** attempt * 2)
+                    raise IOError(f'Zenodo download failed: {e!r}') from e
+                wait = min(300, 5 * 2 ** attempt)
+                if isinstance(e, urllib.error.HTTPError) and e.code in (429, 503):
+                    try:
+                        wait = max(wait, int(e.headers.get('Retry-After', 60)))
+                    except ValueError:
+                        wait = max(wait, 60)
+                    pause['until'] = max(pause['until'], time.time() + wait)
+                time.sleep(wait)
         out.append(data)
         length -= end - start
         piece, start = piece + 1, 0
@@ -171,7 +182,7 @@ def convert(key, pieces, folder):
     return fetched, n / RATE
 
 
-def fetch(data, hours, workers=6):
+def fetch(data, hours, workers=4):
     folder = os.path.join(data, 'multitrack')
     downloads = os.path.join(data, 'downloads')
     os.makedirs(downloads, exist_ok=True)
@@ -191,7 +202,7 @@ def fetch(data, hours, workers=6):
     if packed * 0.4 > free * 0.9:
         raise SystemExit('Not enough free disk space: ask for fewer --hours, or free some space first.')
 
-    lock, done, started = threading.Lock(), [0, 0], time.time()
+    lock, done, started, skipped = threading.Lock(), [0, 0], time.time(), []
 
     def save():
         json.dump(have, open(index_path + '.tmp', 'w'), indent=0)
@@ -206,6 +217,7 @@ def fetch(data, hours, workers=6):
                 fetched, seconds = job.result()
             except Exception as e:
                 print(f'  {key}: skipped ({e})', flush=True)
+                skipped.append(key)
                 continue
             with lock:
                 have[key] = {'seconds': round(seconds, 3), 'held_out': held_out}
@@ -224,6 +236,8 @@ def fetch(data, hours, workers=6):
     pool.shutdown()
     save()
     print(f'Multitracks ready: {sum(v["seconds"] for v in have.values()) / 3600:.1f} hours.')
+    if skipped:
+        print(f'{len(skipped)} recordings could not be fetched this time; run the same command again to fetch them.')
 
 
 class Multitracks:
@@ -262,7 +276,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--data', default='data')
     ap.add_argument('--hours', type=float, default=20, help='hours of drums to train on (on top of the check set)')
-    ap.add_argument('--workers', type=int, default=6, help='downloads at the same time')
+    ap.add_argument('--workers', type=int, default=4, help='downloads at the same time')
     args = ap.parse_args()
     fetch(args.data, args.hours, args.workers)
 

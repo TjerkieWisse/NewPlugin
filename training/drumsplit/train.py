@@ -177,7 +177,16 @@ def main():
                                          batch_size=args.batch, num_workers=args.workers, worker_init_fn=quiet_worker,
                                          persistent_workers=args.workers > 0, prefetch_factor=4 if args.workers else None)
     stop = []
-    signal.signal(signal.SIGINT, lambda *_: stop.append(True))
+
+    def on_ctrl_c(*_):
+        if stop:                                      # a second Ctrl+C: quit now, from the last save
+            print('\nQuitting without saving; the same command carries on from the last save '
+                  '(at most 10 minutes back).', flush=True)
+            os._exit(1)
+        stop.append(True)
+        print('\nStopping after this update and saving: a few seconds, or a few minutes during a check. '
+              'Press Ctrl+C again to quit at once.', flush=True)
+    signal.signal(signal.SIGINT, on_ctrl_c)
     log = open(os.path.join(run, 'log.csv'), 'a', newline='')
     writer = csv.writer(log)
     if log.tell() == 0:

@@ -1,8 +1,14 @@
 # Splits a drum stem into its five parts with a training run's best model, to listen to how it's
 # doing. Works like the plugin: chunks of the training length, overlapping by half and cross-faded.
 #
-# Usage: python split.py <drums.wav> [--run runs/large] [--out <folder>]
+# Usage: python split.py <drums.wav> [--run runs/large] [--out <folder>] [--sharpen 2]
 # The parts go into '<drums> - parts (update N)' next to the file, N being the version's training update.
+#
+# --sharpen P shares every moment of every frequency in the drums out among the parts by how loud the
+# model makes each part there, to the power P: the part that's loudest there gets more of it, the
+# faint copies in the other parts (the bleed) less, and the parts add up to the drums exactly. 1 keeps
+# the model's own balance; 2 is the usual choice; higher takes out more bleed, but can leave the
+# parts sounding hollow.
 import argparse, os
 os.environ.setdefault('PYTORCH_ENABLE_MPS_FALLBACK', '1')
 import numpy as np, soundfile as sf, torch
@@ -15,6 +21,7 @@ def main():
     ap.add_argument('drums')
     ap.add_argument('--run', default='runs/large')
     ap.add_argument('--out', default=None)
+    ap.add_argument('--sharpen', type=float, default=0, help='take bleed out: 2 is the usual, 0 is off')
     args = ap.parse_args()
 
     if not os.path.isfile(args.drums):
@@ -45,8 +52,13 @@ def main():
     with torch.no_grad():
         for start in range(0, padded.shape[1] - chunk + 1, hop):
             x = torch.from_numpy(padded[None, :, start:start + chunk].copy()).to(device)
-            out = net(M.spectrogram(x, dim_f))[0]                          # [5, 4, dim_f, dim_t]
+            mix = M.spectrogram(x, dim_f)
+            out = net(mix)[0]                                              # [5, 4, dim_f, dim_t]
             spec = torch.complex(out[:, 0::2], out[:, 1::2])               # [5, 2, dim_f, dim_t]
+            if args.sharpen > 0:
+                share = spec.abs() ** args.sharpen
+                share = share / (share.sum(0, keepdim=True) + 1e-12)
+                spec = torch.complex(mix[0, 0::2], mix[0, 1::2])[None] * share
             spec = torch.nn.functional.pad(spec, (0, 0, 0, M.N_FFT // 2 + 1 - dim_f))
             y = torch.istft(spec.reshape(10, -1, dim_t), M.N_FFT, M.HOP, window=window, length=chunk)
             parts[:, :, start:start + chunk] += y.reshape(5, 2, chunk).cpu().numpy() * fade
@@ -54,7 +66,8 @@ def main():
     parts = parts[:, :, hop:hop + n] / np.maximum(weight[hop:hop + n], 1e-6)
 
     # Named after the training update, so splits from later, better versions sit next to earlier ones.
-    out = args.out or f'{os.path.splitext(args.drums)[0]} - parts (update {state["step"]})'
+    sharpened = f', sharpen {args.sharpen:g}' if args.sharpen > 0 else ''
+    out = args.out or f'{os.path.splitext(args.drums)[0]} - parts (update {state["step"]}{sharpened})'
     os.makedirs(out, exist_ok=True)
     for i, name in enumerate(G.CLASSES):
         sf.write(os.path.join(out, f'{i + 1} {name}.wav'), parts[i].T, G.RATE, subtype='PCM_24')

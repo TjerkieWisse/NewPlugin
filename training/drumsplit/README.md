@@ -103,6 +103,7 @@ To hear how it's doing at any point, split a drum stem with the best version so 
 
 ```bash
 .venv/bin/python split.py "path/to/drums.wav" --run runs/large2     # writes the five parts next to it
+.venv/bin/python split.py "path/to/drums.wav" --run runs/large2 --sharpen 2   # the same, with less bleed
 ```
 
 When it's done, `export.py --run runs/<config name>` makes `kitnap_drumsep5.onnx` there, the file the plugin loads in

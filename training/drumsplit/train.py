@@ -125,12 +125,14 @@ def main():
             raise SystemExit(f'{run} holds a run of an older kind of model, which this one can\'t carry on from. '
                              f'Rename or delete that folder to start afresh.')
         net.load_state_dict(state['model']); ema.load_state_dict(state['ema'])
-        opt.load_state_dict(state['opt']); scaler.load_state_dict(state['scaler'])
+        opt.load_state_dict(state['opt'])
         step, best = state['step'], state['best']
         state_check_set[0] = state.get('check_set', 'unknown')
         if not state.get('half', True) and half:          # it already had to leave fp16 behind
             half = False
             scaler = torch.amp.GradScaler(device.type, enabled=False)
+        if half and state['scaler']:                      # a run in full precision saves no scaler state
+            scaler.load_state_dict(state['scaler'])
         print(f'Carrying on from update {step} of {updates}{"" if half else " in full precision"}.')
         if args.from_best or not all(torch.isfinite(p).all() for p in net.parameters()):
             step = restore_best()

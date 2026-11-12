@@ -66,6 +66,21 @@ tom, hat, open hat, crash, ride), checks that it's one clear hit of that kind, a
 skipped. Run it again after adding sounds. Only use sounds you made or recorded yourself, or have
 the maker's permission to train on: many sample packs forbid it.
 
+## Does real music under the drums throw the model off?
+
+A drum stem pulled out of a song still has a little of the other instruments in it; in training, the
+model only heard simple tones in their place. To measure whether that matters, put a few of your own
+tracks **without drums** (bass, synths, keys, vocals; WAV, AIFF, FLAC or MP3) in `my_music/` next to
+this README, and run:
+
+```bash
+.venv/bin/python music_test.py --run runs/xlarge
+```
+
+It splits the same drums on their own, with those tones underneath, and with your music underneath,
+and prints how close each part comes to the truth each time and how much of the added sound ends up
+in the parts. If your music does clearly more harm than the tones, training with it should help.
+
 ## Real drum multitracks
 
 StemGMD has the Groove MIDI drummers' performances played on ten acoustic kits, every drum on its own

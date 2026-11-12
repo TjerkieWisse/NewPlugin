@@ -145,6 +145,11 @@ def main():
         torch.save(state | (extra or {}), path + '.tmp')
         os.replace(path + '.tmp', path)               # never a half-written checkpoint
 
+    tracks = G.music.Music(args.music) if os.path.isdir(args.music) else []
+    print(f'Other instruments under the drums: {len(tracks)} tracks, {tracks.hours * 60:.0f} minutes of your music '
+          f'from {args.music}/, and made-up tones.' if len(tracks) else
+          f'Other instruments under the drums: made-up tones only (no music in {args.music}/).', flush=True)
+
     # A fixed set of examples to check progress on, the same every time: a third of them, once
     # multitrack.py has fetched them, from real recordings the model never trains on. When new training
     # material changes this set, its scores can't be compared with earlier ones: the best starts afresh.

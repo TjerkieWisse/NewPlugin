@@ -36,12 +36,13 @@ def quiet_worker(_):
 class Stream(torch.utils.data.IterableDataset):
     """Training examples from the generator; every worker draws its own."""
 
-    def __init__(self, data, seconds, seed):
-        self.data, self.seconds, self.seed = data, seconds, seed
+    def __init__(self, data, seconds, seed, music):
+        self.data, self.seconds, self.seed, self.music = data, seconds, seed, music
 
     def __iter__(self):
         info = torch.utils.data.get_worker_info()
-        for mix, parts in G.Examples(self.data, self.seconds, seed=self.seed, stream=info.id if info else 0):
+        for mix, parts in G.Examples(self.data, self.seconds, seed=self.seed, stream=info.id if info else 0,
+                                     music_folder=self.music):
             yield torch.from_numpy(mix), torch.from_numpy(parts)
 
 
@@ -69,6 +70,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--config', default='configs/large.yaml')
     ap.add_argument('--data', default='data')
+    ap.add_argument('--music', default='my_music', help='your own music without drums, to go under the drums')
     ap.add_argument('--run', default=None, help='folder for checkpoints and logs (default: runs/<config name>)')
     ap.add_argument('--batch', type=int, default=2)
     ap.add_argument('--accum', type=int, default=2, help='batches added up per update')
@@ -146,7 +148,7 @@ def main():
     # A fixed set of examples to check progress on, the same every time: a third of them, once
     # multitrack.py has fetched them, from real recordings the model never trains on. When new training
     # material changes this set, its scores can't be compared with earlier ones: the best starts afresh.
-    validation = [next(e) for e in [iter(G.Examples(args.data, seconds, seed=987654, held_out=True))] for _ in range(48)]
+    validation = [next(e) for e in [iter(G.Examples(args.data, seconds, seed=987654, held_out=True, music_folder=args.music))] for _ in range(48)]
     check_set = hashlib.sha1(b''.join(v[0][:, ::997].tobytes() for v in validation)).hexdigest()[:12]
     earlier = state_check_set[0]
     if earlier == 'unknown':                          # saved before this was kept: it had only made-up examples
@@ -173,7 +175,7 @@ def main():
         return loss / chunks, totals / chunks
 
     # Every start draws new examples, so a resumed run doesn't repeat the ones it already saw.
-    loader = torch.utils.data.DataLoader(Stream(args.data, seconds, seed=args.seed * 1_000_003 + step),
+    loader = torch.utils.data.DataLoader(Stream(args.data, seconds, seed=args.seed * 1_000_003 + step, music=args.music),
                                          batch_size=args.batch, num_workers=args.workers, worker_init_fn=quiet_worker,
                                          persistent_workers=args.workers > 0, prefetch_factor=4 if args.workers else None)
     stop = []

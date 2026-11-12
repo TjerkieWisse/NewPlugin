@@ -1,19 +1,27 @@
-# Makes the training examples: a drum mix and its five parts (kick, snare, toms, hi-hat, cymbals),
-# which add up to the mix apart from any residue of other instruments. Every example is new: a groove (a real drummer from Groove MIDI or a
-# programmed pattern), a kit (synthesised sounds, a recorded acoustic kit from the bank, or a blend),
-# each part mixed with its own EQ, compression, saturation, panning and reverb, the whole kit through
-# a bus compressor or limiter, and sometimes a little of other instruments left in the mix, the way a
-# drum stem pulled out of a song has some.
+# Makes the training examples: a drum mix and its five parts (kick, snare, toms, hi-hat, cymbals).
+# Every example is new: a groove (a real drummer from Groove MIDI or a programmed pattern), a kit
+# (synthesised sounds, a recorded acoustic kit from the bank, or a blend), each part mixed with its own
+# EQ, compression, saturation, panning and reverb, the whole kit through a bus compressor or limiter.
+#
+# Most examples also have other instruments under the drums, the way a drum stem pulled out of a song
+# has some: your own drumless music from my_music/ (see music.py), or made-up bass notes and chords.
+# They're in the mix but in none of the parts, so the model learns to leave out what isn't a drum; a
+# few examples have no drums at all, only that.
 #
 # A third of the examples, when multitrack.py has fetched them, start instead from a real drummer's
 # multitrack recording (StemGMD), sped up or slowed down a little, sometimes with one part swapped for
 # another recording's or left out; then the same mixing as the rest.
 import json, os, sys, functools, numpy as np, soundfile as sf
 from scipy import signal
-import fx, multitrack, patterns, synth
+import fx, multitrack, music, patterns, synth
 
 RATE = 44100
 CLASSES = synth.CLASSES
+# How often an example has other instruments under the drums, and how often (of those, in training)
+# it has nothing else: no drums at all, as where the drums pause in a song. The model has to leave
+# all of it out of the parts.
+OTHER_SHARE = 0.7
+OTHER_ONLY_SHARE = 0.08
 MULTITRACK_SHARE = 0.35                # real recordings are acoustic: leave room for electronic kits
 
 
@@ -135,16 +143,30 @@ def _multitrack_parts(rng, multitracks, n, held_out):
     return parts
 
 
-def make_example(rng, grooves, bank, seconds, multitracks=None, held_out=False):
+def _other(rng, n, tracks):
+    """What a drum stem pulled out of a song still has of the other instruments, [2, n] at an average
+    level of 1: a stretch of your own drumless music (my_music/) when there is any, or else, and
+    sometimes anyway, made-up bass notes and chords."""
+    sound = None
+    if tracks is not None and len(tracks) and rng.random() < 0.7:
+        sound = tracks.excerpt(rng, n)
+        if rng.random() < 0.5:
+            sound = fx.random_eq(rng, sound)
+    if sound is None or np.sqrt(np.mean(sound ** 2)) < 1e-3:
+        sound = _residue(rng, n)
+    return sound / (np.sqrt(np.mean(sound ** 2)) + 1e-9)
+
+
+def make_example(rng, grooves, bank, seconds, multitracks=None, held_out=False, tracks=None):
     """One training example: mix [2, n] and parts [5, 2, n], float32. held_out takes the multitracks
-    kept apart for checking."""
+    kept apart for checking. tracks is your own drumless music, if any (music.Music)."""
     n = int(round(seconds * RATE))
     real = multitracks is not None and multitracks.available(held_out) and rng.random() < MULTITRACK_SHARE
     if real:
         stems = _multitrack_parts(rng, multitracks, n, held_out)
     else:
         stems = _render(rng, grooves, bank, n, seconds)
-    return _mix(rng, stems, n, real)
+    return _mix(rng, stems, n, real, tracks, held_out)
 
 
 def _render(rng, grooves, bank, n, seconds):
@@ -179,9 +201,9 @@ def _render(rng, grooves, bank, n, seconds):
     return stems
 
 
-def _mix(rng, stems, n, real):
-    """Mixes the parts: levels, EQ, compression, saturation, width, a shared room, the bus, residue of
-    other instruments, and the overall level. A real recording keeps its own balance half the time."""
+def _mix(rng, stems, n, real, tracks=None, held_out=False):
+    """Mixes the parts: levels, EQ, compression, saturation, width, a shared room, the bus, other
+    instruments underneath, and the overall level. A real recording keeps its own balance half the time."""
     natural = real and rng.random() < 0.5
     room = fx.random_reverb_ir(rng) if rng.random() < 0.6 else None
     for c in range(len(CLASSES)):
@@ -206,9 +228,13 @@ def _mix(rng, stems, n, real):
 
     stems = fx.bus(rng, stems)
     mix = stems.sum(0)
-    if rng.random() < 0.4:
-        rms = np.sqrt(np.mean(mix ** 2)) + 1e-9
-        mix = mix + _residue(rng, n) * rms * fx.db(rng.uniform(-35, -15))
+    if rng.random() < OTHER_SHARE:
+        other = _other(rng, n, tracks)
+        if not held_out and rng.random() < OTHER_ONLY_SHARE:
+            stems = np.zeros_like(stems)              # no drums here: every part is silence
+            mix = other
+        else:
+            mix = mix + other * np.sqrt(np.mean(mix ** 2)) * fx.db(rng.uniform(-35, -8))
     # As loud as drums pulled out of a mastered song: an average level of -24 to -10 dBFS, peaks no
     # higher than 0 dBFS.
     scale = min(fx.db(rng.uniform(-24, -10)) / (np.sqrt(np.mean(mix ** 2)) + 1e-9), 1 / (np.max(np.abs(mix)) + 1e-9))
@@ -219,13 +245,15 @@ class Examples:
     """Endless examples for training. Pass a torch worker's id as `stream` so every worker draws
     different ones; the same seed and stream always give the same examples."""
 
-    def __init__(self, data_folder, seconds, seed=0, stream=0, held_out=False):
+    def __init__(self, data_folder, seconds, seed=0, stream=0, held_out=False, music_folder='my_music'):
         self.grooves = patterns.load_groove_midi(os.path.join(data_folder, 'groove'))
         self.bank = Bank(os.path.join(data_folder, 'bank'))
         self.multitracks = multitrack.Multitracks(data_folder)
+        self.tracks = music.Music(music_folder) if music_folder and os.path.isdir(music_folder) else None
         self.seconds, self.held_out = seconds, held_out
         self.rng = np.random.default_rng([seed, stream])
 
     def __iter__(self):
         while True:
-            yield make_example(self.rng, self.grooves, self.bank, self.seconds, self.multitracks, self.held_out)
+            yield make_example(self.rng, self.grooves, self.bank, self.seconds, self.multitracks, self.held_out,
+                               self.tracks)

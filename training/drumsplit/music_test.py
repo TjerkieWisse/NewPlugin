@@ -3,7 +3,8 @@
 # place. This splits the same drums three ways with a trained model: on their own, with those tones
 # underneath, and with your own drumless music (my_music/) underneath at the same level. It prints
 # how close each part comes to the truth each time, and how much of the added sound ends up in the
-# parts. If your music does clearly more harm than the tones, training with it should help.
+# parts (and how much of your music does when there are no drums at all). A model that has learned to
+# leave out what isn't a drum lets little of it through.
 #
 # Usage: python music_test.py [--music my_music] [--run runs/xlarge] [--data data] [--examples 40] [--level -20]
 import argparse, os
@@ -47,11 +48,12 @@ def main():
 
     energy = lambda s: (s.abs() ** 2).sum(dim=(1, 2, 3))          # per part, of a spectrogram [parts, 2, f, t]
     rng = np.random.default_rng(13579)
-    examples = iter(G.Examples(args.data, n / G.RATE, seed=2468, held_out=True))
+    examples = iter(G.Examples(args.data, n / G.RATE, seed=2468, held_out=True, music_folder=None))
     kinds = ['drums only', 'with test tones', 'with your music']
     accuracy = {k: np.zeros(len(G.CLASSES)) for k in kinds}
     landed = {k: np.zeros(len(G.CLASSES)) for k in kinds[1:]}
     counted = np.zeros(len(G.CLASSES))
+    alone = np.zeros(len(G.CLASSES))
     with torch.no_grad():
         for i in range(args.examples):
             _, parts = next(examples)
@@ -74,6 +76,8 @@ def main():
                     landed[kind] += (energy(out - clean) / (energy(sound_spec[None]) + 1e-12)).numpy()
                 snr = 10 * torch.log10(energy(truth) / (energy(out - truth) + 1e-12) + 1e-12).numpy()
                 accuracy[kind] += np.where(present, snr, 0)
+            out, sound_spec = split(added['with your music'] * 10 ** (-args.level / 20))    # at the drums' level
+            alone += (energy(out) / (energy(sound_spec[None]) + 1e-12)).numpy()
             if (i + 1) % 10 == 0:
                 print(f'  {i + 1}/{args.examples}', flush=True)
 
@@ -87,6 +91,8 @@ def main():
     for kind in kinds[1:]:
         row = 100 * landed[kind] / args.examples
         print(f'  {kind[5:]:18}' + ''.join(f'{v:8.1f}%' for v in row) + f'{row.sum():8.1f}%')
+    row = 100 * alone / args.examples
+    print(f'  {"music, no drums":18}' + ''.join(f'{v:8.1f}%' for v in row) + f'{row.sum():8.1f}%')
     cost = {k: np.mean((accuracy['drums only'] - accuracy[k]) / np.maximum(counted, 1)) for k in kinds[1:]}
     print(f'\nThe test tones cost {cost["with test tones"]:.1f} dB on average, your music {cost["with your music"]:.1f} dB.')
 

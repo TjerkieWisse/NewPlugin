@@ -66,20 +66,23 @@ tom, hat, open hat, crash, ride), checks that it's one clear hit of that kind, a
 skipped. Run it again after adding sounds. Only use sounds you made or recorded yourself, or have
 the maker's permission to train on: many sample packs forbid it.
 
-## Does real music under the drums throw the model off?
+## Other instruments under the drums
 
-A drum stem pulled out of a song still has a little of the other instruments in it; in training, the
-model only heard simple tones in their place. To measure whether that matters, put a few of your own
-tracks **without drums** (bass, synths, keys, vocals; WAV, AIFF, FLAC or MP3) in `my_music/` next to
-this README, and run:
+A drum stem pulled out of a song still has a little of the other instruments in it, and the model
+has to leave that out of the parts. So most training examples have other instruments under the
+drums, in the mix but in none of the parts, and a few have no drums at all. Put your own tracks
+**without drums** (bass, synths, keys, vocals; WAV, AIFF, FLAC or MP3) in `my_music/` next to this
+README and training uses those; without any, it uses made-up bass notes and chords only.
+
+To measure how much a trained model lets through:
 
 ```bash
 .venv/bin/python music_test.py --run runs/xlarge
 ```
 
-It splits the same drums on their own, with those tones underneath, and with your music underneath,
-and prints how close each part comes to the truth each time and how much of the added sound ends up
-in the parts. If your music does clearly more harm than the tones, training with it should help.
+It splits the same drums on their own, with made-up tones underneath and with your music underneath,
+and prints how close each part comes to the truth and how much of the added sound ends up in the
+parts (0% would be ideal).
 
 ## Real drum multitracks
 

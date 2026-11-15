@@ -22,7 +22,7 @@ jobs:
         #     test: build/KitnapAnalyzerTest_artefacts/Release/KitnapAnalyzerTest
         include:
           - name: macOS
-            os: macos-14
+            os: macos-15
             test: build/KitnapAnalyzerTest_artefacts/Release/KitnapAnalyzerTest
 
     steps:

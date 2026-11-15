@@ -250,11 +250,11 @@ float rms (const std::vector<float>& x, int from, int to)
     return (float) std::sqrt (sum / (to - from));
 }
 
-// Where a cut-out sound should end, from where its sound ends (`end`): a few ms earlier when its last
-// 50 ms swell up again. That's what comes next in the part leaking in (the models smear every hit
-// back in time by up to their 46 ms window, so a hit's lead-in comes before its onset): the sound
-// then ends where it was quietest, before the swell.
-int endBeforeSwell (const std::vector<float>& x, int onset, int end, double sr)
+// Where a cut-out sound should end, from where its sound ends (`end`): a few ms earlier when, in its
+// last 50 ms, it has died away (30 dB under its peak) and then swells up again. That's what comes next
+// in the part leaking in (the models smear every hit back in time by up to their 46 ms window, so a
+// hit's lead-in comes before its onset): the sound then ends where it was quietest, before the swell.
+int endBeforeSwell (const std::vector<float>& x, int onset, int end, float peak, double sr)
 {
     const int step = std::max (1, (int) (0.005 * sr));
     const int from = std::max (onset + (int) (0.05 * sr), end - (int) (0.05 * sr));
@@ -264,6 +264,8 @@ int endBeforeSwell (const std::vector<float>& x, int onset, int end, double sr)
     if (levels.size() < 2)
         return end;
     const auto quietest = std::min_element (levels.begin(), levels.end());
+    if (*quietest > peak * juce::Decibels::decibelsToGain (-30.0f))
+        return end;
     const bool swells = std::any_of (quietest + 1, levels.end(),
                                      [q = *quietest] (float l) { return l > q * juce::Decibels::decibelsToGain (6.0f); });
     return swells ? from + (int) (quietest - levels.begin() + 1) * step : end;
@@ -545,10 +547,10 @@ AnalysisResult DrumAnalyzer::extract (const std::vector<juce::AudioBuffer<float>
                 }
 
             // Cut it out as it is: from 2 ms before the hit (faded in) to where its sound ends (5 ms
-            // fade-out), before anything that swells up at its very end.
+            // fade-out), before the next hit's lead-in if that swells up at its very end.
             const auto& h = hits[best];
             const int start = std::max (0, h.onset - preroll);
-            const int length = endBeforeSwell (x, h.onset, h.end, sr) - start;
+            const int length = endBeforeSwell (x, h.onset, h.end, h.peak, sr) - start;
             if (length <= preroll + fadeOut)
                 continue;
             DrumSample sample;

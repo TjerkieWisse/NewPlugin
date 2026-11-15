@@ -18,8 +18,8 @@ struct ModelSpec
     const char* fileName;
     int fftOrder, hop;
 };
-const ModelSpec drumsModel { "kitnap_drums_sw.onnx", 11, 512 }; // BS-RoFormer SW, drums only
-const ModelSpec splitModel { "kitnap_drumsep5.onnx", 11, 512 }; // DrumSep 5 stems (MDX23C)
+const ModelSpec drumsModel { "kitnap_drums_4stem.onnx", 11, 441 }; // ZFTurbo's 4-stem BS-RoFormer, drums only
+const ModelSpec splitModel { "kitnap_drumsep5.onnx", 11, 512 }; // KITNAP drum split (MDX23C)
 
 juce::Array<juce::File> searchFolders()
 {
@@ -631,7 +631,7 @@ juce::AudioBuffer<float> DrumSeparator::separate (const juce::AudioBuffer<float>
         if (! session.open (runtime.env, findModel (drumsModel), allowGpu, error))
             return {};
         onGpu = session.onGpu;
-        // BS-RoFormer SW, drums only: [1, 2 channels, 1025 bins, frames, re/im] in and out.
+        // BS-RoFormer, drums only: [1, 2 channels, 1025 bins, frames, re/im] in and out.
         const auto& dims = session.inputDims;
         if (dims.size() != 5 || dims[1] != 2 || dims[2] != (1 << drumsModel.fftOrder) / 2 + 1 || dims[4] != 2
             || session.outputSize != session.inputSize)
@@ -682,7 +682,7 @@ std::vector<juce::AudioBuffer<float>> DrumSeparator::split (const juce::AudioBuf
         if (! session.open (runtime.env, findModel (splitModel), allowGpu, error))
             return {};
         onGpu = session.onGpu;
-        // DrumSep (MDX23C): [1, 4, bins, frames] in, [1, parts, 4, bins, frames] out.
+        // MDX23C: [1, 4, bins, frames] in, [1, parts, 4, bins, frames] out.
         const auto& dims = session.inputDims;
         if (dims.size() != 4 || dims[1] != 4 || dims[2] > (1 << splitModel.fftOrder) / 2 + 1
             || session.outputSize != session.inputSize * (size_t) numDrumParts)

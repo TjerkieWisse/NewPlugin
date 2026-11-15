@@ -1,23 +1,20 @@
-# Converts the BS-RoFormer SW checkpoint (6 stems, released by jarredou) into the ONNX model KITNAP
-# runs to pull the drums out of a song. Only the drums are exported, and the STFT is left out of
-# the model: the plugin computes it (n_fft 2048, hop 512, periodic Hann window, center=True).
+# Converts ZFTurbo's 4-stem BS-RoFormer (bass, drums, vocals, other; MIT, from his
+# Music-Source-Separation-Training) into the ONNX model KITNAP runs to pull the drums out of a song.
+# Only the drums are exported, and the STFT is left out of the model: the plugin computes it (n_fft
+# 2048, hop 441, periodic Hann window, center=True).
 #
 #   input  "spectrogram": [1, 2, 1025, frames, 2]  (channel, frequency bin, frame, real/imaginary)
 #   output "drums":       [1, 2, 1025, frames, 2]  the drums' spectrogram, same layout
 #
-# frames is fixed at 345 (176128 samples, 4 s). The model was trained on 13 s chunks, but its
-# attention over time needs memory that grows with the square of the chunk length (over 14 GB at
-# 13 s, about 3 GB at 4 s); at 4 s the result is within -22 dB of the 13 s one.
+# frames is fixed at 401 (176400 samples, 4 s). The model was trained on 11 s chunks, but its
+# attention over time needs memory that grows with the square of the chunk length.
 #
-# The weights are stored as 16-bit floats, which holds them exactly (see compact_onnx.py).
-#
-# Usage: python export_sw.py <bs_roformer_sw.safetensors> <out.onnx>
-# Needs: torch, onnx, onnxruntime, safetensors, numpy, and BS-RoFormer==0.4.1 (later versions of
-# that package changed the architecture and can't load these weights).
+# Usage: python export_drums.py <model_bs_roformer_ep_17_sdr_9.6568.ckpt> <out.onnx>
+# Needs: torch, onnx, onnxruntime, numpy, and BS-RoFormer==0.4.1 (the network's code; later versions
+# of that package changed the architecture and can't load these weights).
 import sys, numpy as np, torch
 from torch import nn
 from einops import rearrange, pack, unpack
-from safetensors.torch import load_file
 from bs_roformer import BSRoformer
 from bs_roformer.attend import Attend
 import bs_roformer.bs_roformer as bsr
@@ -53,16 +50,22 @@ def rotate(self, t, seq_dim=None, offset=0, scale=None):
     return t * cos + swapped * sin
 RotaryEmbedding.rotate_queries_or_keys = rotate
 
-STEMS = ['bass', 'drums', 'other', 'vocals', 'guitar', 'piano']
-FRAMES = 345
+STEMS = ['drums', 'bass', 'other', 'vocals']          # the order the model was trained with
+HOP = 441
+FRAMES = 401
 
 def build(weights):
+    # config_bs_roformer_384_8_2_485100.yaml from the same release
     freqs = tuple([2] * 24 + [4] * 12 + [12] * 8 + [24] * 8 + [48] * 8 + [128, 129])
-    model = BSRoformer(dim=256, depth=12, stereo=True, num_stems=6, time_transformer_depth=1, freq_transformer_depth=1,
+    model = BSRoformer(dim=384, depth=8, stereo=True, num_stems=4, time_transformer_depth=1, freq_transformer_depth=1,
                        freqs_per_bands=freqs, dim_head=64, heads=8, attn_dropout=0.0, ff_dropout=0.0, flash_attn=False,
-                       dim_freqs_in=1025, stft_n_fft=2048, stft_hop_length=512, stft_win_length=2048,
+                       dim_freqs_in=1025, stft_n_fft=2048, stft_hop_length=HOP, stft_win_length=2048,
                        stft_normalized=False, mask_estimator_depth=2)
-    model.load_state_dict(load_file(weights), strict=True)
+    # Its mask estimators are half as wide as this package's default (mlp_expansion_factor 2).
+    model.mask_estimators = nn.ModuleList([bsr.MaskEstimator(dim=384, dim_inputs=model.band_split.dim_inputs, depth=2,
+                                                             mlp_expansion_factor=2) for _ in STEMS])
+    state = torch.load(weights, map_location='cpu', weights_only=True)
+    model.load_state_dict(state.get('state_dict', state), strict=True)
     return model.eval()
 
 class DrumsFromSpectrogram(nn.Module):
@@ -100,20 +103,13 @@ def main():
 
     # A real-looking input: the STFT of noise bursts, so the check covers the whole value range.
     torch.manual_seed(0)
-    audio = torch.randn(2, (FRAMES - 1) * 512) * torch.rand(2, 1) * 0.3
+    audio = torch.randn(2, (FRAMES - 1) * HOP) * torch.rand(2, 1) * 0.3
     window = torch.hann_window(2048, periodic=True)
-    spec = torch.view_as_real(torch.stft(audio, 2048, 512, window=window, center=True, return_complex=True))[None]
+    spec = torch.view_as_real(torch.stft(audio, 2048, HOP, window=window, center=True, return_complex=True))[None]
 
     with torch.no_grad():
         torch.onnx.export(wrapper, (spec,), out, input_names=['spectrogram'], output_names=['drums'],
                           opset_version=17, dynamo=False)
-
-    # The weights are 16-bit values stored as 32-bit floats: store them at half the size (lossless).
-    import onnx
-    from compact_onnx import compact
-    exported = onnx.load(out)
-    compact(exported)
-    onnx.save(exported, out)
 
     # Check against the original model's own drums output (with its own STFT and inverse STFT).
     import onnxruntime
@@ -121,7 +117,7 @@ def main():
         expected = model(audio[None])[0, STEMS.index('drums')].numpy()
     got = onnxruntime.InferenceSession(out, providers=['CPUExecutionProvider']).run(None, {'spectrogram': spec.numpy()})[0]
     got = torch.view_as_complex(torch.from_numpy(got[0]).contiguous())
-    got = torch.istft(got, 2048, 512, window=window, center=True, length=audio.shape[-1]).numpy()
+    got = torch.istft(got, 2048, HOP, window=window, center=True, length=audio.shape[-1]).numpy()
     n = min(got.shape[-1], expected.shape[-1])
     error = float(np.abs(got[..., :n] - expected[..., :n]).max() / (np.abs(expected).max() + 1e-9))
     print('drums - relative error', error)

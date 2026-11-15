@@ -12,7 +12,7 @@ endif()
 
 option(KITNAP_BUILD_TESTS "Build the analyzer test" ON)
 option(KITNAP_WITH_AI "Bundle ONNX Runtime and the AI drum separation model" ON)
-option(KITNAP_WITH_DRUM_SPLIT "Convert the AI drum split model (needs Python with torch and onnx)" ON)
+option(KITNAP_WITH_DRUM_SPLIT "Download the AI drum split model" ON)
 option(KITNAP_BUILD_SCREENSHOT "Build the UI screenshot tool (Linux, needs a display)" OFF)
 
 # JUCE is downloaded automatically. Point KITNAP_JUCE_PATH at a local checkout to skip the download.

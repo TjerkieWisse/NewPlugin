@@ -73,11 +73,11 @@ set(KITNAP_AI_AVAILABLE TRUE)
 set(KITNAP_ORT_INCLUDE_DIR "${_ort_dir}/include")
 set(KITNAP_ORT_LIBRARY "${_ort_dir}/${_ort_library}")
 
-# The models are converted to ONNX at configure time, which needs Python with torch, onnx,
-# onnxruntime, numpy, pyyaml, safetensors and BS-RoFormer==0.4.1. Already converted models can be
-# passed instead with -DKITNAP_SEPARATION_ONNX=<file> and -DKITNAP_DRUMSEP_ONNX=<file>. They are
-# hundreds of MB, so they aren't copied into every plugin: the installers put them in a shared
-# folder once (see DrumSeparator.h).
+# The separation model is converted to ONNX at configure time, which needs Python with torch, onnx,
+# onnxruntime, numpy and BS-RoFormer==0.4.1; the drum split model is downloaded as ONNX. Already
+# converted models can be passed instead with -DKITNAP_SEPARATION_ONNX=<file> and
+# -DKITNAP_DRUMSEP_ONNX=<file>. They are hundreds of MB, so they aren't copied into every plugin: the
+# installers put them in a shared folder once (see DrumSeparator.h).
 find_package(Python3 COMPONENTS Interpreter)
 
 # _kitnap_convert(<output> <script> <inputs...>): runs tools/<script> <inputs...> <output>.
@@ -97,24 +97,24 @@ function(_kitnap_convert output script)
         file(RENAME "${output}.part" "${output}")
     else()
         file(REMOVE "${output}.part")
-        message(WARNING "KITNAP: converting ${_name} failed (pip install torch onnx onnxruntime numpy pyyaml safetensors BS-RoFormer==0.4.1):\n${_output}")
+        message(WARNING "KITNAP: converting ${_name} failed (pip install torch onnx onnxruntime numpy BS-RoFormer==0.4.1):\n${_output}")
     endif()
 endfunction()
 
-# Drum separation: BS-RoFormer SW (6 stems: bass, drums, other, vocals, guitar, piano; weights
-# released by jarredou), of which only the drums are exported.
-set(KITNAP_SEPARATION_ONNX "" CACHE FILEPATH "Already converted drum separation model (kitnap_drums_sw.onnx)")
-set(KITNAP_SW_URL "https://github.com/mogonzal/mixdown-models/releases/download/bs-roformer-sw-v1/bs_roformer_sw.safetensors")
-set(KITNAP_SW_HASH "56c131428745d83d63f72293d237fdbb56f40d8e4b6980cbcde70e28a9f7330f")
-set(KITNAP_MODEL_FILE "${_ai_dir}/kitnap_drums_sw.onnx")
+# Drum separation: ZFTurbo's 4-stem BS-RoFormer (bass, drums, vocals, other; MIT, from his
+# Music-Source-Separation-Training releases), of which only the drums are exported.
+set(KITNAP_SEPARATION_ONNX "" CACHE FILEPATH "Already converted drum separation model (kitnap_drums_4stem.onnx)")
+set(KITNAP_SEPARATION_URL "https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/download/v1.0.12/model_bs_roformer_ep_17_sdr_9.6568.ckpt")
+set(KITNAP_SEPARATION_HASH "3e9daecd70aaed5b5a0d1f861cc4d77eaa45afb3fc6301b1cf32c1be0f5868fb")
+set(KITNAP_MODEL_FILE "${_ai_dir}/kitnap_drums_4stem.onnx")
 
 if(KITNAP_SEPARATION_ONNX)
     configure_file("${KITNAP_SEPARATION_ONNX}" "${KITNAP_MODEL_FILE}" COPYONLY)
 elseif(NOT EXISTS "${KITNAP_MODEL_FILE}")
     set(_kitnap_download_failed FALSE)
-    _kitnap_download("${KITNAP_SW_URL}" "${_ai_dir}/bs_roformer_sw.safetensors" "${KITNAP_SW_HASH}")
+    _kitnap_download("${KITNAP_SEPARATION_URL}" "${_ai_dir}/bs_roformer_4stem.ckpt" "${KITNAP_SEPARATION_HASH}")
     if(NOT _kitnap_download_failed)
-        _kitnap_convert("${KITNAP_MODEL_FILE}" export_sw.py "${_ai_dir}/bs_roformer_sw.safetensors")
+        _kitnap_convert("${KITNAP_MODEL_FILE}" export_drums.py "${_ai_dir}/bs_roformer_4stem.ckpt")
     endif()
 endif()
 set(KITNAP_SEPARATION_AVAILABLE FALSE)
@@ -122,27 +122,28 @@ if(EXISTS "${KITNAP_MODEL_FILE}")
     set(KITNAP_SEPARATION_AVAILABLE TRUE)
 endif()
 
-# Drum split model: DrumSep 5 stems v2025 (MDX23C) by jarredou, splitting the drum stem into kick,
-# snare, toms, hi-hat and cymbals. Its original release is gone; this copy is from the DrumToMIDI
-# project (the hashes pin that copy, there are no official ones).
+# Drum split model: KITNAP's own (MDX23C, trained with training/drumsplit on material we may use
+# commercially), splitting the drum stem into kick, snare, toms, hi-hat and cymbals. It's already ONNX,
+# so it's only downloaded, from this repository's releases.
 set(KITNAP_DRUMSEP_ONNX "" CACHE FILEPATH "Already converted drum split model (kitnap_drumsep5.onnx)")
-set(KITNAP_DRUMSEP_CKPT_URL "https://media.githubusercontent.com/media/EverlastEngineering/DrumToMIDI/main/mdx_models/drumsep_5stems_mdx23c_jarredou.ckpt")
-set(KITNAP_DRUMSEP_YAML_URL "https://raw.githubusercontent.com/EverlastEngineering/DrumToMIDI/main/mdx_models/config_mdx23c.yaml")
-set(KITNAP_DRUMSEP_CKPT_HASH "1f8e636fb674b88a52c8399fde9a4ebe2b72b065ca07eed4e03ab1c9f0bfb2e0")
-set(KITNAP_DRUMSEP_YAML_HASH "d2962f43d6682e8ea84e77fb50a2680e4641ba1749ee95f8ea6e96bba3278944")
+set(KITNAP_SPLIT_URL "https://github.com/TjerkieWisse/NewPlugin/releases/download/drumsplit-v1/kitnap_drumsep5.onnx")
+set(KITNAP_SPLIT_HASH "b9035189abdc7d3e36be3a0cf9db04fabbd20ce09eb74ccf05f3f3c6d0576348")
 set(KITNAP_SPLIT_MODEL_FILE "${_ai_dir}/kitnap_drumsep5.onnx")
 
 if(KITNAP_WITH_DRUM_SPLIT)
     if(KITNAP_DRUMSEP_ONNX)
         configure_file("${KITNAP_DRUMSEP_ONNX}" "${KITNAP_SPLIT_MODEL_FILE}" COPYONLY)
-    elseif(NOT EXISTS "${KITNAP_SPLIT_MODEL_FILE}")
-        set(_kitnap_download_failed FALSE)
-        _kitnap_download("${KITNAP_DRUMSEP_CKPT_URL}" "${_ai_dir}/drumsep5.ckpt" "${KITNAP_DRUMSEP_CKPT_HASH}")
-        if(NOT _kitnap_download_failed)
-            _kitnap_download("${KITNAP_DRUMSEP_YAML_URL}" "${_ai_dir}/drumsep5.yaml" "${KITNAP_DRUMSEP_YAML_HASH}")
+    else()
+        # A model from an earlier release (or jarredou's DrumSep, which older builds used) is replaced.
+        if(EXISTS "${KITNAP_SPLIT_MODEL_FILE}")
+            file(SHA256 "${KITNAP_SPLIT_MODEL_FILE}" _split_hash)
+            if(NOT _split_hash STREQUAL KITNAP_SPLIT_HASH)
+                file(REMOVE "${KITNAP_SPLIT_MODEL_FILE}")
+            endif()
         endif()
-        if(NOT _kitnap_download_failed)
-            _kitnap_convert("${KITNAP_SPLIT_MODEL_FILE}" export_drumsep.py "${_ai_dir}/drumsep5.ckpt" "${_ai_dir}/drumsep5.yaml")
+        if(NOT EXISTS "${KITNAP_SPLIT_MODEL_FILE}")
+            set(_kitnap_download_failed FALSE)
+            _kitnap_download("${KITNAP_SPLIT_URL}" "${KITNAP_SPLIT_MODEL_FILE}" "${KITNAP_SPLIT_HASH}")
         endif()
     endif()
 endif()

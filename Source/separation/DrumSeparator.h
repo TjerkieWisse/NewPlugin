@@ -7,8 +7,8 @@
 
 namespace kitnap
 {
-// The two AI models KITNAP runs: BS-RoFormer SW pulls the drum stem out of a full mix, then the
-// 5-stem drum split model splits that stem into kick, snare, toms, hi-hat and cymbals.
+// The two AI models KITNAP runs: ZFTurbo's 4-stem BS-RoFormer pulls the drum stem out of a full mix,
+// then KITNAP's own drum split model splits that stem into kick, snare, toms, hi-hat and cymbals.
 //
 // ONNX Runtime and the models are looked up next to the plugin binary (in "Resources" or
 // "../Resources", which is Contents/Resources inside a plugin bundle), then in the shared

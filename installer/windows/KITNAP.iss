@@ -49,13 +49,14 @@ Source: "{#Artefacts}\VST3\KITNAP.vst3\*"; DestDir: "{commoncf64}\VST3\KITNAP.vs
 Source: "{#Artefacts}\Standalone\*"; DestDir: "{app}"; Excludes: "onnxruntime*.dll"; Components: standalone; Flags: ignoreversion recursesubdirs createallsubdirs
 ; The AI runtime and models are shared by the plugin and the app, so they're installed once.
 Source: "{#Artefacts}\Standalone\Resources\onnxruntime.dll"; DestDir: "{commonappdata}\KITNAP"; Components: ai; Flags: ignoreversion
-Source: "{#AIFiles}\kitnap_drums_sw.onnx"; DestDir: "{commonappdata}\KITNAP"; Components: ai; Flags: ignoreversion nocompression
+Source: "{#AIFiles}\kitnap_drums_4stem.onnx"; DestDir: "{commonappdata}\KITNAP"; Components: ai; Flags: ignoreversion nocompression
 Source: "{#AIFiles}\kitnap_drumsep5.onnx"; DestDir: "{commonappdata}\KITNAP"; Components: ai; Flags: ignoreversion nocompression
 
 [InstallDelete]
 ; Models older versions installed, which this one no longer uses.
 Type: files; Name: "{commonappdata}\KITNAP\kitnap_drums.onnx"
 Type: files; Name: "{commonappdata}\KITNAP\kitnap_drumsep.onnx"
+Type: files; Name: "{commonappdata}\KITNAP\kitnap_drums_sw.onnx"
 Type: files; Name: "{commoncf64}\VST3\KITNAP.vst3\Contents\Resources\kitnap_drums.onnx"
 Type: files; Name: "{app}\Resources\kitnap_drums.onnx"
 ; The runtime older versions put inside the plugin and the app: it would be found before the

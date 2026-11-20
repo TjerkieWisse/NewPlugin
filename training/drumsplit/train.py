@@ -79,6 +79,8 @@ def main():
     ap.add_argument('--lr', type=float, default=3e-4)
     ap.add_argument('--workers', type=int, default=3)
     ap.add_argument('--fp32', action='store_true', help='train in full precision (slower)')
+    ap.add_argument('--loudness-only', action='store_true',
+                    help='score only how loud each part is per bin, not its exact waveform (fuller, less cautious)')
     ap.add_argument('--from-best', action='store_true',
                     help='go back to the best version so far and carry on from there (after a run went wrong)')
     ap.add_argument('--seed', type=int, default=0)
@@ -128,6 +130,9 @@ def main():
         opt.load_state_dict(state['opt'])
         step, best = state['step'], state['best']
         state_check_set[0] = state.get('check_set', 'unknown')
+        if state.get('loudness_only', False) != args.loudness_only:     # a new goal: earlier scores don't compare
+            best = -1e9
+            print('The training goal changed (--loudness-only), so the best score starts afresh.')
         if not state.get('half', True) and half:          # it already had to leave fp16 behind
             half = False
             scaler = torch.amp.GradScaler(device.type, enabled=False)
@@ -143,7 +148,7 @@ def main():
     def save(path, extra=None):
         state = {'model': net.state_dict(), 'ema': ema.state_dict(), 'opt': opt.state_dict(),
                  'scaler': scaler.state_dict(), 'step': step, 'best': best, 'config': args.config, 'output': output,
-                 'half': half, 'check_set': check_set}
+                 'half': half, 'check_set': check_set, 'loudness_only': args.loudness_only}
         torch.save(state | (extra or {}), path + '.tmp')
         os.replace(path + '.tmp', path)               # never a half-written checkpoint
 
@@ -174,7 +179,7 @@ def main():
                 with torch.autocast(device.type, dtype=torch.float16, enabled=half):
                     out = ema(spec)
                 out = out.float()
-                loss += float(M.loss_fn(out, spec, parts, dim_f))
+                loss += float(M.loss_fn(out, spec, parts, dim_f, args.loudness_only))
                 b, p, c, n = parts.shape
                 target = M.spectrogram(parts.reshape(b * p, c, n), dim_f).reshape(out.shape)
                 totals += part_snr(out, target).cpu()
@@ -219,7 +224,7 @@ def main():
                 spec = M.spectrogram(mix, dim_f)
                 with torch.autocast(device.type, dtype=torch.float16, enabled=half):
                     out = net(spec)
-                loss = M.loss_fn(out.float(), spec, parts, dim_f) / args.accum
+                loss = M.loss_fn(out.float(), spec, parts, dim_f, args.loudness_only) / args.accum
                 if not torch.isfinite(loss):          # a number ran out of range (NaN): skip this update
                     finite = False
                     break
@@ -287,7 +292,9 @@ def main():
             print('  check: loss %.4f, ' % val_loss + ', '.join(f'{p} {d:.1f} dB' for p, d in zip(PARTS, part_db)), flush=True)
             writer.writerow([step, step * args.batch * args.accum, '', f'{val_loss:.5f}'] + [f'{d:.2f}' for d in part_db])
             log.flush()
-            score = float(part_db.mean())
+            # The best version: the closest parts, or with --loudness-only (which trades some waveform
+            # accuracy for fuller parts) the lowest loss by its own measure.
+            score = -val_loss if args.loudness_only else float(part_db.mean())
             if score > best:
                 best = score
                 torch.save({'ema': ema.state_dict(), 'step': step, 'config': args.config}, os.path.join(run, 'best.pt'))

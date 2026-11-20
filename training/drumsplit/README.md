@@ -124,6 +124,12 @@ To hear how it's doing at any point, split a drum stem with the best version so 
 .venv/bin/python split.py "path/to/drums.wav" --run runs/large2 --sharpen 2   # the same, with less bleed
 ```
 
+To see whether a part comes out dull, `band_test.py --run runs/<config name>` prints how much of each
+part's sound the model gives back per frequency band (100% is right, less is dull) on fixed examples.
+`--loudness-only` trains on how loud each part is per bin only, not its exact waveform, as jarredou's
+DrumSep was: the waveform score makes the model cautious about what it can't place exactly, such as a
+kick's click. With it, the best version is the one with the lowest loss.
+
 When it's done, `export.py --run runs/<config name>` makes `kitnap_drumsep5.onnx` there, the file the plugin loads in
 place of the current split model.
 

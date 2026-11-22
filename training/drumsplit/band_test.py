@@ -52,8 +52,10 @@ def main():
     print('How much of each part comes back per band (100% is right, less is dull):')
     print('  %-9s' % 'Hz' + ''.join('%12s' % f'{lo}-{hi}' for lo, hi in BANDS) + '   closeness')
     for i, name in enumerate(G.CLASSES):
-        # bands holding under 0.5% of the part's sound (a hi-hat's lows) say nothing: left out
-        share = ''.join('%11.0f%%' % (100 * g / t) if t > 0.005 * true[i].sum() else '%12s' % '-' for g, t in zip(given[i], true[i]))
+        # where a part is next to nothing beside the other drums (a hi-hat's lows: under 0.1% of the
+        # band), its share says nothing: left out
+        share = ''.join('%11.0f%%' % (100 * g / t) if t > 0.001 * all_t else '%12s' % '-'
+                        for g, t, all_t in zip(given[i], true[i], true.sum(0)))
         print('  %-9s' % name + share + '%9.1f dB' % (10 * np.log10(ref[i] / err[i])))
 
 

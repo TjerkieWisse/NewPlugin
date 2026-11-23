@@ -167,8 +167,9 @@ endif()
 # commercially), splitting the drum stem into kick, snare, toms, hi-hat and cymbals. It's already ONNX,
 # so it's only downloaded, from this repository's releases.
 set(KITNAP_DRUMSEP_ONNX "" CACHE FILEPATH "Already converted drum split model (kitnap_drumsep5.onnx)")
-set(KITNAP_SPLIT_URL "https://github.com/TjerkieWisse/NewPlugin/releases/download/drumsplit-v1/kitnap_drumsep5.onnx")
-set(KITNAP_SPLIT_HASH "b9035189abdc7d3e36be3a0cf9db04fabbd20ce09eb74ccf05f3f3c6d0576348")
+# v2: the xlarge run at update 37926 (v1, update 74000, was trained further with music under the drums).
+set(KITNAP_SPLIT_URL "https://github.com/TjerkieWisse/NewPlugin/releases/download/drumsplit-v2/kitnap_drumsep5.onnx")
+set(KITNAP_SPLIT_HASH "c16f3c9a804106799c80b5b1f65379c5806bf39cddd55598dae1dffaee53ff63")
 set(KITNAP_SPLIT_MODEL_FILE "${_ai_dir}/kitnap_drumsep5.onnx")
 
 if(KITNAP_WITH_DRUM_SPLIT)

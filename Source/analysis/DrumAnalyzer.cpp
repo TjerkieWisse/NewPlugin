@@ -495,10 +495,10 @@ AnalysisResult DrumAnalyzer::extract (const std::vector<juce::AudioBuffer<float>
             return {};
 
         const auto splitPart = (SplitPart) c;
-        const auto drumClass = padForPart (splitPart);
         const auto& part = parts[(size_t) c];
-        if (part.getNumSamples() == 0 || part.getNumChannels() == 0)
+        if (padForPart (splitPart) < 0 || part.getNumSamples() == 0 || part.getNumChannels() == 0)
             continue;
+        const auto drumClass = (DrumClass) padForPart (splitPart);
         const auto x = toMono (part);
         auto hits = findHits (x, sr, splitPart, loudestPart, regions);
         for (auto& h : hits)

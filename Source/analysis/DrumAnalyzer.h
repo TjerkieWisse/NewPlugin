@@ -7,32 +7,34 @@
 
 namespace kitnap
 {
-// The four pads.
-enum class DrumClass { kick, snare, toms, cymbals };
-constexpr int numDrumClasses = 4;
+// The three pads.
+enum class DrumClass { kick, snare, cymbals };
+constexpr int numDrumClasses = 3;
 
 inline const char* drumClassName (DrumClass c)
 {
-    static constexpr const char* names[] { "KICK", "SNARE", "TOMS", "CYMBALS" };
+    static constexpr const char* names[] { "KICK", "SNARE", "CYMBALS" };
     return names[(int) c];
 }
 
-// The five parts of the AI drum split, in the same order as DrumSeparator::DrumPart. Each part goes
-// on its own pad, except the hi-hats, which share the cymbals pad.
+// The five parts of the AI drum split, in the same order as DrumSeparator::DrumPart. The kick and
+// snare parts each have their own pad, the hi-hats and cymbals share the cymbals pad, and the toms
+// part is left out.
 enum class SplitPart { kick, snare, toms, hihat, cymbals };
 constexpr int numSplitParts = 5;
 
-inline DrumClass padForPart (SplitPart p)
+// The pad a part goes on, or -1 for none.
+inline int padForPart (SplitPart p)
 {
     switch (p)
     {
-        case SplitPart::kick:    return DrumClass::kick;
-        case SplitPart::snare:   return DrumClass::snare;
-        case SplitPart::toms:    return DrumClass::toms;
-        case SplitPart::hihat:   return DrumClass::cymbals;
-        case SplitPart::cymbals: return DrumClass::cymbals;
+        case SplitPart::kick:    return (int) DrumClass::kick;
+        case SplitPart::snare:   return (int) DrumClass::snare;
+        case SplitPart::toms:    return -1;
+        case SplitPart::hihat:   return (int) DrumClass::cymbals;
+        case SplitPart::cymbals: return (int) DrumClass::cymbals;
     }
-    return DrumClass::cymbals;
+    return -1;
 }
 
 // One drum sound: a single hit cut straight out of its part, as it sounds in the song.
@@ -60,7 +62,8 @@ struct AnalysisResult
 };
 
 // Builds the kit from the five parts of the AI drum split (kick, snare, toms, hi-hat, cymbals):
-// every pad comes from its own part and nothing else, the cymbals pad from the hi-hat and cymbals parts.
+// every pad comes from its own part and nothing else, the cymbals pad from the hi-hat and cymbals parts;
+// the toms part isn't used.
 // Each part is analysed on its own (so a crash that comes twice isn't lost among hundreds of hats).
 //   1. find the hits in the part (spectral flux), ignoring leftovers far below its real hits
 //   2. group hits that sound alike; each group is one variation on the pad

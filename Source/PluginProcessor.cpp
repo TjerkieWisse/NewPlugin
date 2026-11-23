@@ -9,7 +9,8 @@ namespace
 {
 constexpr double maxSourceSeconds = 12.0 * 60.0;
 constexpr int overviewBuckets = 2000;
-constexpr int kitFormat = 3; // 2: five pads (kick, snare, toms, hi-hat, cymbals); 3: four, the hi-hats on the cymbals pad
+// 2: five pads (kick, snare, toms, hi-hat, cymbals); 3: four, the hi-hats on the cymbals pad; 4: three, without toms
+constexpr int kitFormat = 4;
 
 juce::MemoryBlock encodeWav (const DrumSample& sample)
 {
@@ -470,14 +471,16 @@ void KitnapAudioProcessor::setStateInformation (const void* data, int sizeInByte
     if (auto params = root.getChildWithName (apvts.state.getType()); params.isValid())
         apvts.replaceState (params);
 
-    // Kits with five pads (kick, snare, toms, hi-hat, cymbals) are restored with the hi-hat's sounds
-    // and the cymbals' on one cymbals pad. Older kits don't fit and aren't restored.
+    // Kits saved with more pads are restored onto these: the hi-hat's sounds and the cymbals' on the
+    // cymbals pad, the toms left out. Older kits don't fit and aren't restored.
     auto kitTree = root.getChildWithName ("Kit");
     const int version = kitTree.getProperty ("version", 1);
-    if (version != kitFormat && version != 2)
+    static const std::vector<int> fivePads { 0, 1, -1, 2, 2 }, fourPads { 0, 1, -1, 2 }, threePads { 0, 1, 2 };
+    const auto& padsFor = version == 2 ? fivePads : version == 3 ? fourPads : threePads;
+    if (version < 2 || version > kitFormat)
         kitTree = {};
-    const int padsInTree = version == 2 ? 5 : numDrumClasses;
-    auto padOf = [version] (int stored) { return version == 2 && stored == 4 ? (int) DrumClass::cymbals : stored; };
+    const int padsInTree = (int) padsFor.size();
+    auto padOf = [padsFor] (int stored) { return padsFor[(size_t) stored]; }; // copied: restoring may happen later
 
     auto restore = [this, kitTree, padsInTree, padOf]
     {
@@ -503,12 +506,12 @@ void KitnapAudioProcessor::setStateInformation (const void* data, int sizeInByte
         for (const auto& padTree : kitTree)
         {
             const int stored = padTree.getProperty ("index", -1);
-            if (! juce::isPositiveAndBelow (stored, padsInTree))
+            if (! juce::isPositiveAndBelow (stored, padsInTree) || padOf (stored) < 0)
                 continue;
             const int pad = padOf (stored);
             auto& vars = kit.variations[(size_t) pad];
 
-            // The pad's selection, unless it's sounds added after another part's (a five-pad kit's cymbals).
+            // The pad's selection, unless it's sounds added after another part's (an older kit's cymbals).
             const bool first = vars.empty();
             for (const auto& sound : padTree)
             {
@@ -545,7 +548,7 @@ void KitnapAudioProcessor::setStateInformation (const void* data, int sizeInByte
             std::vector<PackedHit> packed (block.getSize() / sizeof (PackedHit));
             block.copyTo (packed.data(), 0, block.getSize());
             for (auto& p : packed)
-                if (juce::isPositiveAndBelow ((int) p.drumClass, padsInTree))
+                if (juce::isPositiveAndBelow ((int) p.drumClass, padsInTree) && padOf (p.drumClass) >= 0)
                     kit.hits.push_back ({ p.position, (DrumClass) padOf (p.drumClass), (float) p.strength / 32767.0f });
         }
 

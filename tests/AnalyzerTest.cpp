@@ -564,17 +564,19 @@ int syntheticTest (const juce::File& out)
     bool ok = true;
     auto fail = [&ok] (const juce::String& why) { std::cout << "  FAIL: " << why << "\n"; ok = false; };
 
-    // The parts each pad's sounds come from (the cymbals pad: the hi-hat and cymbals parts).
+    // The parts each pad's sounds come from (the cymbals pad: the hi-hat and cymbals parts; the toms
+    // part goes nowhere).
     auto partsOf = [] (int pad)
     {
         std::vector<int> fed;
         for (int p = 0; p < numSplitParts; ++p)
-            if ((int) padForPart ((SplitPart) p) == pad)
+            if (padForPart ((SplitPart) p) == pad)
                 fed.push_back (p);
         return fed;
     };
 
-    // 1. Every hit of every part is found, at the right place, on its pad, and nothing else (not the bleed).
+    // 1. Every hit of every part is found, at the right place, on its pad, and nothing else (not the bleed,
+    // not the tom fill).
     for (int c = 0; c < numDrumClasses; ++c)
     {
         std::vector<int> found, truth;
@@ -605,8 +607,7 @@ int syntheticTest (const juce::File& out)
     // 2. Each pad's sound is its own drum.
     struct Expected { DrumClass pad; std::vector<float> sound; const char* name; };
     const Expected expected[] { { DrumClass::kick, makeKick(), "kick" }, { DrumClass::kick, makeShortKick(), "short kick" },
-                                { DrumClass::snare, makeSnare(), "snare" }, { DrumClass::toms, makeTom (true), "high tom" },
-                                { DrumClass::toms, makeTom (false), "low tom" }, { DrumClass::cymbals, makeHat(), "hat" },
+                                { DrumClass::snare, makeSnare(), "snare" }, { DrumClass::cymbals, makeHat(), "hat" },
                                 { DrumClass::cymbals, makeCrash(), "crash" } };
     for (auto& e : expected)
     {
@@ -617,8 +618,8 @@ int syntheticTest (const juce::File& out)
         if (best < 0.99f)
             fail (juce::String (e.name) + " not on its pad");
     }
-    if (result.kit[(size_t) DrumClass::kick].size() != 2 || result.kit[(size_t) DrumClass::toms].size() != 2)
-        fail ("expected two kicks and two toms");
+    if (result.kit[(size_t) DrumClass::kick].size() != 2)
+        fail ("expected two kicks");
     // The hat and the crash share the cymbals pad, the hat (far more frequent) first.
     const auto& cymbals = result.kit[(size_t) DrumClass::cymbals];
     if (cymbals.size() != 2 || bestCorrelation (makeHat(), cymbals.front().audio) < 0.99f)

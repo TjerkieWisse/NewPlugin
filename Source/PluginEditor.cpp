@@ -167,7 +167,7 @@ void KitnapAudioProcessorEditor::resized()
 
     // The pad tiles in a row under the song, then the volume tile.
     for (int i = 0; i < (int) pads.size(); ++i)
-        pads[(size_t) i]->setBounds (24 + i * 191, 332, 178, 284);
+        pads[(size_t) i]->setBounds (24 + i * 255, 332, 242, 284);
     volume.setBounds (volumeTile().getX() + 20, volumeTile().getY() + 84, 104, 104);
 }
 

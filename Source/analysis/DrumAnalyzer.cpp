@@ -12,15 +12,15 @@ namespace
 constexpr float pi = juce::MathConstants<float>::pi;
 
 // The longest a pad's sound may be: long enough for a crash to ring out.
-double maxSecondsFor (DrumClass c)
+double maxSecondsFor (SplitPart p)
 {
-    switch (c)
+    switch (p)
     {
-        case DrumClass::kick:    return 1.5;
-        case DrumClass::snare:   return 1.5;
-        case DrumClass::toms:    return 2.0;
-        case DrumClass::hihat:   return 1.5;
-        case DrumClass::cymbals: return 4.0;
+        case SplitPart::kick:    return 1.5;
+        case SplitPart::snare:   return 1.5;
+        case SplitPart::toms:    return 2.0;
+        case SplitPart::hihat:   return 1.5;
+        case SplitPart::cymbals: return 4.0;
     }
     return 1.5;
 }
@@ -274,7 +274,7 @@ int endBeforeSwell (const std::vector<float>& x, int onset, int end, float peak,
 // Finds the hits in one part, with where each one's sound ends.
 // Only hits inside `regions` count (all of x when empty), from 30 ms after a region's start on (its
 // first moments may be the middle of a sound), and a sound ends at its region's end at the latest.
-std::vector<Hit> findHits (const std::vector<float>& x, double sr, DrumClass drumClass, float loudestPart,
+std::vector<Hit> findHits (const std::vector<float>& x, double sr, SplitPart splitPart, float loudestPart,
                            std::vector<juce::Range<int>> regions)
 {
     const int n = (int) x.size();
@@ -335,7 +335,7 @@ std::vector<Hit> findHits (const std::vector<float>& x, double sr, DrumClass dru
     hits.erase (std::remove_if (hits.begin(), hits.end(), [gate] (auto& h) { return h.peak < gate; }), hits.end());
 
     const int preroll = (int) (0.002 * sr);
-    const int maxLength = (int) (maxSecondsFor (drumClass) * sr);
+    const int maxLength = (int) (maxSecondsFor (splitPart) * sr);
     const int window = std::max (1, (int) (0.01 * sr));
     for (auto& h : hits)
     {
@@ -479,7 +479,7 @@ AnalysisResult DrumAnalyzer::extract (const std::vector<juce::AudioBuffer<float>
                                       const std::vector<juce::Range<int>>& regions)
 {
     AnalysisResult result;
-    if ((int) parts.size() != numDrumClasses || sr <= 0.0)
+    if ((int) parts.size() != numSplitParts || sr <= 0.0)
         return result;
 
     const int preroll = (int) (0.002 * sr), fadeOut = (int) (0.005 * sr);
@@ -489,17 +489,18 @@ AnalysisResult DrumAnalyzer::extract (const std::vector<juce::AudioBuffer<float>
         for (int ch = 0; ch < part.getNumChannels(); ++ch)
             loudestPart = std::max (loudestPart, part.getMagnitude (ch, 0, part.getNumSamples()));
 
-    for (int c = 0; c < numDrumClasses; ++c)
+    for (int c = 0; c < numSplitParts; ++c)
     {
         if (shouldCancel && shouldCancel())
             return {};
 
-        const auto drumClass = (DrumClass) c;
+        const auto splitPart = (SplitPart) c;
+        const auto drumClass = padForPart (splitPart);
         const auto& part = parts[(size_t) c];
         if (part.getNumSamples() == 0 || part.getNumChannels() == 0)
             continue;
         const auto x = toMono (part);
-        auto hits = findHits (x, sr, drumClass, loudestPart, regions);
+        auto hits = findHits (x, sr, splitPart, loudestPart, regions);
         for (auto& h : hits)
             h.print = fingerprinter.make (x, h.onset, h.end - h.onset);
 
@@ -518,8 +519,8 @@ AnalysisResult DrumAnalyzer::extract (const std::vector<juce::AudioBuffer<float>
             groups.erase (std::remove_if (groups.begin(), groups.end(), [minHits] (auto& g) { return g.size() < minHits; }), groups.end());
         else if (groups.size() > 1)
             groups.resize (1);
-        if (groups.size() > (size_t) maxVariationsPerClass)
-            groups.resize ((size_t) maxVariationsPerClass);
+        if (groups.size() > (size_t) maxVariationsPerPart)
+            groups.resize ((size_t) maxVariationsPerPart);
 
         for (auto& group : groups)
         {
@@ -566,12 +567,16 @@ AnalysisResult DrumAnalyzer::extract (const std::vector<juce::AudioBuffer<float>
             sample.hitsStacked = (int) group.size();
             for (size_t k : group)
                 sample.sourceHits.push_back (firstIndex + (int) k);
-            result.kit[(size_t) c].push_back (std::move (sample));
+            result.kit[(size_t) drumClass].push_back (std::move (sample));
         }
 
         if (progress)
-            progress ((float) (c + 1) / (float) numDrumClasses);
+            progress ((float) (c + 1) / (float) numSplitParts);
     }
+
+    // A pad fed by two parts (the cymbals: hi-hats and cymbals) lists its sounds the most frequent first.
+    for (auto& pad : result.kit)
+        std::stable_sort (pad.begin(), pad.end(), [] (auto& a, auto& b) { return a.hitsStacked > b.hitsStacked; });
 
     // All parts' hits in time order for the waveform, with the sounds' hit indices remapped.
     std::vector<int> order (result.hits.size());

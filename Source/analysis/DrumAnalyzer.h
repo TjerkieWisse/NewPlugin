@@ -7,14 +7,32 @@
 
 namespace kitnap
 {
-// The five pads: one per part of the AI drum split, in the same order as DrumSeparator::DrumPart.
-enum class DrumClass { kick, snare, toms, hihat, cymbals };
-constexpr int numDrumClasses = 5;
+// The four pads.
+enum class DrumClass { kick, snare, toms, cymbals };
+constexpr int numDrumClasses = 4;
 
 inline const char* drumClassName (DrumClass c)
 {
-    static constexpr const char* names[] { "KICK", "SNARE", "TOMS", "HI-HAT", "CYMBALS" };
+    static constexpr const char* names[] { "KICK", "SNARE", "TOMS", "CYMBALS" };
     return names[(int) c];
+}
+
+// The five parts of the AI drum split, in the same order as DrumSeparator::DrumPart. Each part goes
+// on its own pad, except the hi-hats, which share the cymbals pad.
+enum class SplitPart { kick, snare, toms, hihat, cymbals };
+constexpr int numSplitParts = 5;
+
+inline DrumClass padForPart (SplitPart p)
+{
+    switch (p)
+    {
+        case SplitPart::kick:    return DrumClass::kick;
+        case SplitPart::snare:   return DrumClass::snare;
+        case SplitPart::toms:    return DrumClass::toms;
+        case SplitPart::hihat:   return DrumClass::cymbals;
+        case SplitPart::cymbals: return DrumClass::cymbals;
+    }
+    return DrumClass::cymbals;
 }
 
 // One drum sound: a single hit cut straight out of its part, as it sounds in the song.
@@ -42,7 +60,8 @@ struct AnalysisResult
 };
 
 // Builds the kit from the five parts of the AI drum split (kick, snare, toms, hi-hat, cymbals):
-// every pad comes from its own part and nothing else.
+// every pad comes from its own part and nothing else, the cymbals pad from the hi-hat and cymbals parts.
+// Each part is analysed on its own (so a crash that comes twice isn't lost among hundreds of hats).
 //   1. find the hits in the part (spectral flux), ignoring leftovers far below its real hits
 //   2. group hits that sound alike; each group is one variation on the pad
 //   3. per group, pick the cleanest single hit: loud, with room to ring out before the next hit,
@@ -52,7 +71,7 @@ struct AnalysisResult
 class DrumAnalyzer
 {
 public:
-    // parts: numDrumClasses stereo buffers, indexed by DrumClass. progress receives values 0..1;
+    // parts: numSplitParts stereo buffers, indexed by SplitPart. progress receives values 0..1;
     // shouldCancel is polled regularly. With regions (the song sections joined into the parts, see
     // SongSections), only hits inside them count, and no sound runs past its region's end.
     static AnalysisResult extract (const std::vector<juce::AudioBuffer<float>>& parts, double sampleRate,
@@ -60,6 +79,7 @@ public:
                                    const std::function<bool()>& shouldCancel = {},
                                    const std::vector<juce::Range<int>>& regions = {});
 
-    static constexpr int maxVariationsPerClass = 8;
+    // Per part: the cymbals pad, fed by two parts, can hold twice as many.
+    static constexpr int maxVariationsPerPart = 8;
 };
 } // namespace kitnap

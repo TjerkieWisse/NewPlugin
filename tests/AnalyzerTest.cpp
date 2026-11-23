@@ -125,8 +125,8 @@ juce::AudioBuffer<float> toStereo (const std::vector<float>& mono)
 
 struct Beat
 {
-    std::array<std::vector<float>, numDrumClasses> parts;
-    std::array<std::vector<int>, numDrumClasses> hits; // where each part's own hits are
+    std::array<std::vector<float>, numSplitParts> parts;
+    std::array<std::vector<int>, numSplitParts> hits; // where each part's own hits are
 };
 
 // Eight bars at 120 BPM, with two different kicks; the toms play a fill twice and the crash comes twice.
@@ -140,7 +140,7 @@ Beat makeBeat()
 
     const auto kick = makeKick(), shortKick = makeShortKick(), snare = makeSnare(), hat = makeHat(), crash = makeCrash();
     const auto highTom = makeTom (true), lowTom = makeTom (false);
-    auto hit = [&] (DrumClass c, const std::vector<float>& sound, int at, float gain)
+    auto hit = [&] (SplitPart c, const std::vector<float>& sound, int at, float gain)
     {
         add (beat.parts[(size_t) c], sound, at, gain);
         beat.hits[(size_t) c].push_back (at);
@@ -153,17 +153,17 @@ Beat makeBeat()
             const float humanise = 0.85f + 0.15f * (float) ((bar * 7 + s * 3) % 5) / 4.0f;
             const bool fill = bar % 4 == 3 && s >= 12;
             if (s == 0 || s == 10)
-                hit (DrumClass::kick, kick, at, 0.9f * humanise);
+                hit (SplitPart::kick, kick, at, 0.9f * humanise);
             if (s == 7)
-                hit (DrumClass::kick, shortKick, at, 0.7f * humanise);
+                hit (SplitPart::kick, shortKick, at, 0.7f * humanise);
             if ((s == 4 || s == 12) && ! fill)
-                hit (DrumClass::snare, snare, at, 0.7f * humanise);
+                hit (SplitPart::snare, snare, at, 0.7f * humanise);
             if (fill && s % 2 == 0)
-                hit (DrumClass::toms, s < 14 ? highTom : lowTom, at, 0.8f * humanise);
+                hit (SplitPart::toms, s < 14 ? highTom : lowTom, at, 0.8f * humanise);
             if (s % 2 == 0 && ! fill)
-                hit (DrumClass::hihat, hat, at, 0.25f * humanise);
+                hit (SplitPart::hihat, hat, at, 0.25f * humanise);
             if (bar % 4 == 0 && s == 0)
-                hit (DrumClass::cymbals, crash, at, 0.3f);
+                hit (SplitPart::cymbals, crash, at, 0.3f);
         }
     return beat;
 }
@@ -377,8 +377,8 @@ int extractWithAI (const juce::File& in, const juce::File& out, bool wholeSong)
 
     // Any beat has a kick, a snare and hats.
     auto found = [&] (DrumClass c) { return ! result.kit[(size_t) c].empty(); };
-    const bool ok = found (DrumClass::kick) && found (DrumClass::snare) && found (DrumClass::hihat);
-    std::cout << (ok ? "PASS\n" : "FAIL: kick, snare or hi-hat missing\n");
+    const bool ok = found (DrumClass::kick) && found (DrumClass::snare) && found (DrumClass::cymbals);
+    std::cout << (ok ? "PASS\n" : "FAIL: kick, snare or cymbals missing\n");
     return ok ? 0 : 1;
 }
 
@@ -555,8 +555,8 @@ int syntheticTest (const juce::File& out)
     auto beat = makeBeat();
     // A faint copy of the snare in the kick part (-48 dB), like the bleed the AI split leaves behind.
     const auto snare = makeSnare();
-    for (int at : beat.hits[(size_t) DrumClass::snare])
-        add (beat.parts[(size_t) DrumClass::kick], snare, at, 0.004f);
+    for (int at : beat.hits[(size_t) SplitPart::snare])
+        add (beat.parts[(size_t) SplitPart::kick], snare, at, 0.004f);
     std::vector<juce::AudioBuffer<float>> parts;
     for (auto& p : beat.parts)
         parts.push_back (toStereo (p));
@@ -564,14 +564,25 @@ int syntheticTest (const juce::File& out)
     bool ok = true;
     auto fail = [&ok] (const juce::String& why) { std::cout << "  FAIL: " << why << "\n"; ok = false; };
 
-    // 1. Every hit of every part is found, at the right place, and nothing else (not the bleed).
+    // The parts each pad's sounds come from (the cymbals pad: the hi-hat and cymbals parts).
+    auto partsOf = [] (int pad)
+    {
+        std::vector<int> fed;
+        for (int p = 0; p < numSplitParts; ++p)
+            if ((int) padForPart ((SplitPart) p) == pad)
+                fed.push_back (p);
+        return fed;
+    };
+
+    // 1. Every hit of every part is found, at the right place, on its pad, and nothing else (not the bleed).
     for (int c = 0; c < numDrumClasses; ++c)
     {
-        std::vector<int> found;
+        std::vector<int> found, truth;
         for (auto& h : result.hits)
             if ((int) h.drumClass == c)
                 found.push_back (h.position);
-        const auto& truth = beat.hits[(size_t) c];
+        for (int p : partsOf (c))
+            truth.insert (truth.end(), beat.hits[(size_t) p].begin(), beat.hits[(size_t) p].end());
         int matched = 0;
         for (int t : truth)
             for (int f : found)
@@ -595,7 +606,7 @@ int syntheticTest (const juce::File& out)
     struct Expected { DrumClass pad; std::vector<float> sound; const char* name; };
     const Expected expected[] { { DrumClass::kick, makeKick(), "kick" }, { DrumClass::kick, makeShortKick(), "short kick" },
                                 { DrumClass::snare, makeSnare(), "snare" }, { DrumClass::toms, makeTom (true), "high tom" },
-                                { DrumClass::toms, makeTom (false), "low tom" }, { DrumClass::hihat, makeHat(), "hat" },
+                                { DrumClass::toms, makeTom (false), "low tom" }, { DrumClass::cymbals, makeHat(), "hat" },
                                 { DrumClass::cymbals, makeCrash(), "crash" } };
     for (auto& e : expected)
     {
@@ -608,6 +619,10 @@ int syntheticTest (const juce::File& out)
     }
     if (result.kit[(size_t) DrumClass::kick].size() != 2 || result.kit[(size_t) DrumClass::toms].size() != 2)
         fail ("expected two kicks and two toms");
+    // The hat and the crash share the cymbals pad, the hat (far more frequent) first.
+    const auto& cymbals = result.kit[(size_t) DrumClass::cymbals];
+    if (cymbals.size() != 2 || bestCorrelation (makeHat(), cymbals.front().audio) < 0.99f)
+        fail ("expected the hat, then the crash, on the cymbals pad");
 
     // 3. Every sound is a hit of its part, unchanged: the same samples apart from the 2 ms fade-in and
     // the 5 ms fade-out.
@@ -617,17 +632,18 @@ int syntheticTest (const juce::File& out)
         {
             const int n = s.audio.getNumSamples();
             float bestDiff = 1.0f;
-            for (int at : beat.hits[(size_t) c])
-                for (int start = std::max (0, at - fadeIn - 132); start <= std::max (0, at - fadeIn + 132); ++start)
-                {
-                    if (start < 0 || start + n > parts[(size_t) c].getNumSamples())
-                        continue;
-                    float diff = 0.0f;
-                    for (int ch = 0; ch < 2 && diff < bestDiff; ++ch)
-                        for (int i = fadeIn; i < n - fadeOut && diff < bestDiff; ++i)
-                            diff = std::max (diff, std::abs (s.audio.getSample (ch, i) - parts[(size_t) c].getSample (ch, start + i)));
-                    bestDiff = std::min (bestDiff, diff);
-                }
+            for (int p : partsOf (c))
+                for (int at : beat.hits[(size_t) p])
+                    for (int start = std::max (0, at - fadeIn - 132); start <= std::max (0, at - fadeIn + 132); ++start)
+                    {
+                        if (start < 0 || start + n > parts[(size_t) p].getNumSamples())
+                            continue;
+                        float diff = 0.0f;
+                        for (int ch = 0; ch < 2 && diff < bestDiff; ++ch)
+                            for (int i = fadeIn; i < n - fadeOut && diff < bestDiff; ++i)
+                                diff = std::max (diff, std::abs (s.audio.getSample (ch, i) - parts[(size_t) p].getSample (ch, start + i)));
+                        bestDiff = std::min (bestDiff, diff);
+                    }
             if (bestDiff > 1e-6f)
                 fail (juce::String (drumClassName ((DrumClass) c)) + " sound was changed (" + juce::String (bestDiff) + ")");
         }

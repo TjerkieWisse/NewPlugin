@@ -9,7 +9,7 @@ namespace
 {
 constexpr double maxSourceSeconds = 12.0 * 60.0;
 constexpr int overviewBuckets = 2000;
-constexpr int kitFormat = 2; // 2: the five pads of the AI drum split
+constexpr int kitFormat = 3; // 2: five pads (kick, snare, toms, hi-hat, cymbals); 3: four, the hi-hats on the cymbals pad
 
 juce::MemoryBlock encodeWav (const DrumSample& sample)
 {
@@ -168,7 +168,7 @@ public:
                                                  cancel, error);
         if (threadShouldExit())
             return;
-        if ((int) parts.size() != numDrumClasses)
+        if ((int) parts.size() != numSplitParts)
         {
             output->error = "AI drum split failed: " + error;
             return;
@@ -470,12 +470,16 @@ void KitnapAudioProcessor::setStateInformation (const void* data, int sizeInByte
     if (auto params = root.getChildWithName (apvts.state.getType()); params.isValid())
         apvts.replaceState (params);
 
-    // Kits from before the five pads (kick, snare, toms, hi-hat, cymbals) don't fit and aren't restored.
+    // Kits with five pads (kick, snare, toms, hi-hat, cymbals) are restored with the hi-hat's sounds
+    // and the cymbals' on one cymbals pad. Older kits don't fit and aren't restored.
     auto kitTree = root.getChildWithName ("Kit");
-    if ((int) kitTree.getProperty ("version", 1) != kitFormat)
+    const int version = kitTree.getProperty ("version", 1);
+    if (version != kitFormat && version != 2)
         kitTree = {};
+    const int padsInTree = version == 2 ? 5 : numDrumClasses;
+    auto padOf = [version] (int stored) { return version == 2 && stored == 4 ? (int) DrumClass::cymbals : stored; };
 
-    auto restore = [this, kitTree]
+    auto restore = [this, kitTree, padsInTree, padOf]
     {
         if (! kitTree.isValid())
         {
@@ -487,27 +491,36 @@ void KitnapAudioProcessor::setStateInformation (const void* data, int sizeInByte
             job->stopThread (4000);
         job.reset();
 
-        bool anySound = false;
-        for (const auto& padTree : kitTree)
+        for (int pad = 0; pad < numDrumClasses; ++pad)
         {
-            const int pad = padTree.getProperty ("index", -1);
-            if (! juce::isPositiveAndBelow (pad, numDrumClasses))
-                continue;
-
             for (auto& old : kit.variations[(size_t) pad])
                 retire (old);
             kit.variations[(size_t) pad].clear();
+            kit.selected[(size_t) pad] = 0;
+        }
 
+        bool anySound = false;
+        for (const auto& padTree : kitTree)
+        {
+            const int stored = padTree.getProperty ("index", -1);
+            if (! juce::isPositiveAndBelow (stored, padsInTree))
+                continue;
+            const int pad = padOf (stored);
+            auto& vars = kit.variations[(size_t) pad];
+
+            // The pad's selection, unless it's sounds added after another part's (a five-pad kit's cymbals).
+            const bool first = vars.empty();
             for (const auto& sound : padTree)
             {
                 juce::MemoryBlock block;
                 if (block.fromBase64Encoding (sound.getProperty ("flac").toString()))
                     if (auto sample = decodeFlac (block, sound.getProperty ("stacked", 1)))
-                        kit.variations[(size_t) pad].push_back (sample);
+                        vars.push_back (sample);
             }
 
-            const int count = (int) kit.variations[(size_t) pad].size();
-            kit.selected[(size_t) pad] = count > 0 ? juce::jlimit (0, count - 1, (int) padTree.getProperty ("selected", 0)) : 0;
+            const int count = (int) vars.size();
+            if (first && count > 0)
+                kit.selected[(size_t) pad] = juce::jlimit (0, count - 1, (int) padTree.getProperty ("selected", 0));
             anySound = anySound || count > 0;
         }
         applySelectionToSampler();
@@ -532,8 +545,8 @@ void KitnapAudioProcessor::setStateInformation (const void* data, int sizeInByte
             std::vector<PackedHit> packed (block.getSize() / sizeof (PackedHit));
             block.copyTo (packed.data(), 0, block.getSize());
             for (auto& p : packed)
-                if (juce::isPositiveAndBelow ((int) p.drumClass, numDrumClasses))
-                    kit.hits.push_back ({ p.position, (DrumClass) p.drumClass, (float) p.strength / 32767.0f });
+                if (juce::isPositiveAndBelow ((int) p.drumClass, padsInTree))
+                    kit.hits.push_back ({ p.position, (DrumClass) padOf (p.drumClass), (float) p.strength / 32767.0f });
         }
 
         kit.status = anySound ? KitState::Status::ready : KitState::Status::empty;

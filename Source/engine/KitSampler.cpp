@@ -4,8 +4,8 @@ namespace kitnap
 {
 int KitSampler::noteForPad (int pad)
 {
-    // GM drum map: kick, snare, low tom, closed hat, crash.
-    static constexpr int notes[] { 36, 38, 45, 42, 49 };
+    // GM drum map: kick, snare, low tom, closed hat (the cymbals pad holds the hi-hats too).
+    static constexpr int notes[] { 36, 38, 45, 42 };
     return notes[pad];
 }
 
@@ -17,7 +17,7 @@ int KitSampler::padForNote (int note)
         case 35: case 36:                                         return (int) DrumClass::kick;
         case 37: case 38: case 39: case 40:                       return (int) DrumClass::snare;
         case 41: case 43: case 45: case 47: case 48: case 50:     return (int) DrumClass::toms;
-        case 42: case 44: case 46:                                return (int) DrumClass::hihat;
+        case 42: case 44: case 46:                                return (int) DrumClass::cymbals; // hi-hats
         case 49: case 51: case 52: case 53: case 55: case 57: case 59: return (int) DrumClass::cymbals;
         default:                                                  return -1;
     }

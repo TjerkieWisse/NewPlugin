@@ -86,7 +86,7 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release --parallel
 ```
 
-The plugins end up in `build/KITNAP_artefacts/Release/`. The build downloads ONNX Runtime 1.23.2 and the models (checksums verified), copies the runtime into each plugin, and converts the separation model to ONNX, which needs Python with PyTorch (`pip install torch onnx onnxruntime numpy BS-RoFormer==0.4.1`); without it the build continues without it. The models land in `build/kitnap-ai/`: copy them into the shared folder above to use them with a self-built plugin. Pass `-DKITNAP_WITH_AI=OFF` to build without any AI, `-DKITNAP_WITH_DRUM_SPLIT=OFF` to skip downloading the split model, or `-DKITNAP_DRUMSEP_ONNX=<file>` to use another one (such as a newer training run's).
+The plugins end up in `build/KITNAP_artefacts/Release/`. The build downloads ONNX Runtime 1.23.2 (from its GitHub release, or the identical build in Microsoft's NuGet package when that fails) and the models (checksums verified), copies the runtime into each plugin, and converts the separation model to ONNX, which needs Python with PyTorch (`pip install torch onnx onnxruntime numpy BS-RoFormer==0.4.1`); without it the build continues without it. The models land in `build/kitnap-ai/`: copy them into the shared folder above to use them with a self-built plugin. Pass `-DKITNAP_WITH_AI=OFF` to build without any AI, `-DKITNAP_WITH_DRUM_SPLIT=OFF` to skip downloading the split model, or `-DKITNAP_DRUMSEP_ONNX=<file>` to use another one (such as a newer training run's).
 
 ### Tests
 

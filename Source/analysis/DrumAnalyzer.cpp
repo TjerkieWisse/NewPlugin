@@ -250,6 +250,25 @@ float rms (const std::vector<float>& x, int from, int to)
     return (float) std::sqrt (sum / (to - from));
 }
 
+// How a hit dies away: its level in 20 ms steps over its first 300 ms (or up to where its sound ends),
+// in dB relative to its first 20 ms, no lower than -60 dB.
+std::vector<float> decayOf (const std::vector<float>& x, int onset, int end, double sr)
+{
+    const int step = std::max (1, (int) (0.02 * sr));
+    const float first = rms (x, onset, onset + step) + 1e-9f;
+    std::vector<float> levels;
+    for (int i = onset; i + step <= std::min (end, onset + (int) (0.3 * sr)); i += step)
+        levels.push_back (std::max (-60.0f, juce::Decibels::gainToDecibels (rms (x, i, i + step) / first, -60.0f)));
+    return levels;
+}
+
+template <typename T>
+T median (std::vector<T> v)
+{
+    std::nth_element (v.begin(), v.begin() + (std::ptrdiff_t) (v.size() / 2), v.end());
+    return v[v.size() / 2];
+}
+
 // Where a cut-out sound should end, from where its sound ends (`end`): a few ms earlier when, in its
 // last 50 ms, it has died away (30 dB under its peak) and then swells up again. That's what comes next
 // in the part leaking in (the models smear every hit back in time by up to their 46 ms window, so a
@@ -525,27 +544,51 @@ AnalysisResult DrumAnalyzer::extract (const std::vector<juce::AudioBuffer<float>
         for (auto& group : groups)
         {
             // The cleanest hit: among the loud ones (within 6 dB of the loudest), the one with the most
-            // room to ring out, then the least of the previous hit's tail underneath it.
+            // room to ring out and the least of the previous hit's tail underneath it, unless it dies away
+            // unlike the group's hits typically do (a roll or flam, where quick repeats keep it loud,
+            // looks like a hit with plenty of room).
             float loudest = 0.0f;
             for (size_t k : group)
                 loudest = std::max (loudest, hits[k].peak);
-            int longest = 0;
+            std::vector<size_t> loud;
             for (size_t k : group)
                 if (hits[k].peak >= loudest * 0.5f)
-                    longest = std::max (longest, hits[k].end - hits[k].onset);
-            size_t best = group.front();
+                    loud.push_back (k);
+            int longest = 1;
+            std::vector<std::vector<float>> decays;
+            size_t steps = 0;
+            for (size_t k : loud)
+            {
+                longest = std::max (longest, hits[k].end - hits[k].onset);
+                decays.push_back (decayOf (x, hits[k].onset, hits[k].end, sr));
+                steps = std::max (steps, decays.back().size());
+            }
+            std::vector<float> typicalDecay;
+            for (size_t step = 0; step < steps; ++step)
+            {
+                std::vector<float> levels;
+                for (auto& d : decays)
+                    if (step < d.size())
+                        levels.push_back (d[step]);
+                typicalDecay.push_back (median (levels));
+            }
+
+            size_t best = loud.front();
             float bestScore = -1e9f;
-            for (size_t k : group)
-                if (hits[k].peak >= loudest * 0.5f)
+            for (size_t i = 0; i < loud.size(); ++i)
+            {
+                const auto& h = hits[loud[i]];
+                const float room = (float) (h.end - h.onset) / (float) longest;
+                float off = 0.0f;                         // how far it dies away unlike the others, in dB
+                for (size_t step = 0; step < decays[i].size(); ++step)
+                    off += std::abs (decays[i][step] - typicalDecay[step]) / (float) decays[i].size();
+                const float score = room - 2.0f * h.before - off / 10.0f;
+                if (score > bestScore)
                 {
-                    const float room = (float) (hits[k].end - hits[k].onset) / (float) std::max (1, longest);
-                    const float score = room - 2.0f * hits[k].before;
-                    if (score > bestScore)
-                    {
-                        bestScore = score;
-                        best = k;
-                    }
+                    bestScore = score;
+                    best = loud[i];
                 }
+            }
 
             // Cut it out as it is: from 2 ms before the hit (faded in) to where its sound ends (5 ms
             // fade-out), before the next hit's lead-in if that swells up at its very end.

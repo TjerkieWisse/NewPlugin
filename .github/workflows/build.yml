@@ -60,6 +60,8 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE="$(which python)"
           test -f build/kitnap-ai/kitnap_drums_4stem.onnx
           test -f build/kitnap-ai/kitnap_drumsep5.onnx
+          test -f build/kitnap-ai/KITNAP-Credits.txt
+          test -f build/kitnap-ai/ONNXRuntime-ThirdPartyNotices.txt
 
       - name: Build
         run: cmake --build build --config Release --parallel 4
@@ -114,6 +116,7 @@ jobs:
           cp build/KITNAP_artefacts/Release/Standalone/Resources/libonnxruntime.so.* "$staging/"
           find "$staging/VST3" "$staging/LV2" "$staging/Standalone" -name 'libonnxruntime.so.*' -delete
           cp installer/linux/install.sh build/kitnap-ai/kitnap_drums_4stem.onnx build/kitnap-ai/kitnap_drumsep5.onnx "$staging/"
+          cp build/kitnap-ai/KITNAP-Credits.txt build/kitnap-ai/ONNXRuntime-ThirdPartyNotices.txt "$staging/"
           tar czf "build/installer/$staging.tar.gz" "$staging"
 
       - name: Upload installer

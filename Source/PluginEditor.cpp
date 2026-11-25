@@ -11,6 +11,7 @@ KitnapLookAndFeel::KitnapLookAndFeel()
     setColour (juce::TooltipWindow::backgroundColourId, theme::card);
     setColour (juce::TooltipWindow::textColourId, theme::ink);
     setColour (juce::TooltipWindow::outlineColourId, theme::border);
+    setColour (juce::ScrollBar::thumbColourId, theme::inkFaint);
 }
 
 // Pill buttons: white with a hairline, or solid black for the primary one.
@@ -96,6 +97,9 @@ KitnapAudioProcessorEditor::KitnapAudioProcessorEditor (KitnapAudioProcessor& p)
     exportButton.getProperties().set ("primary", true);
     addAndMakeVisible (loadButton);
     addAndMakeVisible (exportButton);
+    creditsButton.setComponentID ("credits");
+    creditsButton.onClick = [this] { credits.setVisible (true); };
+    addAndMakeVisible (creditsButton);
 
     // The volume knob, in the last tile; drag up or down, double-click to reset.
     volume.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
@@ -104,6 +108,7 @@ KitnapAudioProcessorEditor::KitnapAudioProcessorEditor (KitnapAudioProcessor& p)
     if (auto* param = processor.apvts.getParameter ("volume"))
         volume.setDoubleClickReturnValue (true, param->convertFrom0to1 (param->getDefaultValue()));
     addAndMakeVisible (volume);
+    addChildComponent (credits); // last, so it covers everything when shown
 
     processor.addChangeListener (this);
     setSize (960, 640);
@@ -161,6 +166,7 @@ void KitnapAudioProcessorEditor::paintBackground (juce::Graphics& g)
 void KitnapAudioProcessorEditor::resized()
 {
     background = {};
+    creditsButton.setBounds (636, 22, 84, 36);
     loadButton.setBounds (728, 22, 84, 36);
     exportButton.setBounds (820, 22, 116, 36);
     waveform.setBounds (24, 76, 912, 236);
@@ -169,6 +175,7 @@ void KitnapAudioProcessorEditor::resized()
     for (int i = 0; i < (int) pads.size(); ++i)
         pads[(size_t) i]->setBounds (24 + i * 255, 332, 242, 284);
     volume.setBounds (volumeTile().getX() + 20, volumeTile().getY() + 84, 104, 104);
+    credits.setBounds (getLocalBounds());
 }
 
 juce::Rectangle<int> KitnapAudioProcessorEditor::volumeTile() const

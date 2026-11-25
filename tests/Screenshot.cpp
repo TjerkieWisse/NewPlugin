@@ -1,4 +1,5 @@
-// Renders the editor to PNGs: empty, mid-analysis, with a finished kit (pads just hit) and at rest.
+// Renders the editor to PNGs: empty, mid-analysis, with a finished kit (pads just hit), at rest, and
+// with the credits open.
 // Usage: KitnapScreenshot <audio-file> <output-folder>
 
 #include "PluginProcessor.h"
@@ -55,7 +56,7 @@ int main (int argc, char** argv)
     juce::AudioBuffer<float> buffer (2, 512);
     juce::MidiBuffer midi;
     processor->triggerPad (0);
-    processor->triggerPad (3);
+    processor->triggerPad (2);
     processor->processBlock (buffer, midi);
     std::cout << "Pad hit output peak: " << buffer.getMagnitude (0, buffer.getNumSamples()) << "\n";
 
@@ -75,6 +76,12 @@ int main (int argc, char** argv)
     snap (*editor, out.getChildFile ("3-kit.png"));
     pump (1500); // pads back at rest
     snap (*editor, out.getChildFile ("4-kit-rest.png"));
+    if (auto* credits = dynamic_cast<juce::Button*> (editor->findChildWithID ("credits")))
+    {
+        credits->onClick();
+        pump (100);
+        snap (*editor, out.getChildFile ("5-credits.png"));
+    }
 
     // Round-trip the project state into a fresh instance.
     juce::MemoryBlock state;

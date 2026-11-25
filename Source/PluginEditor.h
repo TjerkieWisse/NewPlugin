@@ -2,6 +2,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "PluginProcessor.h"
+#include "ui/CreditsPanel.h"
 #include "ui/PadComponent.h"
 #include "ui/WaveformView.h"
 
@@ -46,10 +47,11 @@ private:
 
     WaveformView waveform;
     std::vector<std::unique_ptr<PadComponent>> pads;
-    juce::TextButton loadButton { "Load" }, exportButton { "Export kit" };
+    juce::TextButton loadButton { "Load" }, exportButton { "Export kit" }, creditsButton { "Credits" };
     juce::TooltipWindow tooltips { this };
     juce::Slider volume;
     juce::AudioProcessorValueTreeState::SliderAttachment volumeAttachment;
+    CreditsPanel credits;
     std::unique_ptr<juce::FileChooser> chooser;
     std::unique_ptr<juce::Drawable> logo;
     juce::Image background;

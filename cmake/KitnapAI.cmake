@@ -75,6 +75,7 @@ function(_kitnap_ort_from_nuget)
     file(REMOVE_RECURSE "${_nuget}")
     file(ARCHIVE_EXTRACT INPUT "${_nupkg}" DESTINATION "${_nuget}")
     file(COPY "${_nuget}/build/native/include/" DESTINATION "${_ort_dir}/include")
+    file(COPY "${_nuget}/LICENSE" "${_nuget}/ThirdPartyNotices.txt" DESTINATION "${_ort_dir}")
     get_filename_component(_lib_dir "${_ort_dir}/${_ort_library}" DIRECTORY)
     file(MAKE_DIRECTORY "${_lib_dir}")
     if(APPLE)
@@ -113,6 +114,13 @@ endif()
 set(KITNAP_AI_AVAILABLE TRUE)
 set(KITNAP_ORT_INCLUDE_DIR "${_ort_dir}/include")
 set(KITNAP_ORT_LIBRARY "${_ort_dir}/${_ort_library}")
+
+# The notices the installers put next to the models and the runtime: KITNAP's credits and licences
+# (also shown in the plugin) and ONNX Runtime's own third-party notices.
+configure_file("${CMAKE_CURRENT_SOURCE_DIR}/Resources/Credits.txt" "${_ai_dir}/KITNAP-Credits.txt" COPYONLY)
+if(EXISTS "${_ort_dir}/ThirdPartyNotices.txt")
+    configure_file("${_ort_dir}/ThirdPartyNotices.txt" "${_ai_dir}/ONNXRuntime-ThirdPartyNotices.txt" COPYONLY)
+endif()
 
 # The separation model is converted to ONNX at configure time, which needs Python with torch, onnx,
 # onnxruntime, numpy and BS-RoFormer==0.4.1; the drum split model is downloaded as ONNX. Already

@@ -51,6 +51,9 @@ Source: "{#Artefacts}\Standalone\*"; DestDir: "{app}"; Excludes: "onnxruntime*.d
 Source: "{#Artefacts}\Standalone\Resources\onnxruntime.dll"; DestDir: "{commonappdata}\KITNAP"; Components: ai; Flags: ignoreversion
 Source: "{#AIFiles}\kitnap_drums_4stem.onnx"; DestDir: "{commonappdata}\KITNAP"; Components: ai; Flags: ignoreversion nocompression
 Source: "{#AIFiles}\kitnap_drumsep5.onnx"; DestDir: "{commonappdata}\KITNAP"; Components: ai; Flags: ignoreversion nocompression
+Source: "{#AIFiles}\KITNAP-Credits.txt"; DestDir: "{commonappdata}\KITNAP"; Components: ai; Flags: ignoreversion
+Source: "{#AIFiles}\ONNXRuntime-ThirdPartyNotices.txt"; DestDir: "{commonappdata}\KITNAP"; Components: ai; Flags: ignoreversion
+Source: "{#AIFiles}\KITNAP-Credits.txt"; DestDir: "{app}"; Components: standalone; Flags: ignoreversion
 
 [InstallDelete]
 ; Models older versions installed, which this one no longer uses.

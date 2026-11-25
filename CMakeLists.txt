@@ -66,7 +66,8 @@ target_sources(KITNAP PRIVATE
     Source/separation/DrumSeparator.cpp
     Source/engine/KitSampler.cpp
     Source/ui/WaveformView.cpp
-    Source/ui/PadComponent.cpp)
+    Source/ui/PadComponent.cpp
+    Source/ui/CreditsPanel.cpp)
 
 target_include_directories(KITNAP PRIVATE Source)
 
@@ -94,8 +95,9 @@ endfunction()
 target_compile_definitions(KITNAP PUBLIC ${KITNAP_DEFINITIONS})
 kitnap_use_ai(KITNAP "")
 
-# Fonts and the FortyVolts logo, compiled into the binary (BinaryData.h).
+# Fonts, the FortyVolts logo and the credits, compiled into the binary (BinaryData.h).
 juce_add_binary_data(KitnapAssets SOURCES
+    Resources/Credits.txt
     Resources/fonts/Michroma-Regular.ttf
     Resources/fonts/Geist-Light.ttf
     Resources/fonts/Geist-Medium.ttf
@@ -152,7 +154,8 @@ if(KITNAP_BUILD_SCREENSHOT)
         Source/separation/DrumSeparator.cpp
         Source/engine/KitSampler.cpp
         Source/ui/WaveformView.cpp
-        Source/ui/PadComponent.cpp)
+        Source/ui/PadComponent.cpp
+        Source/ui/CreditsPanel.cpp)
     target_include_directories(KitnapScreenshot PRIVATE Source)
     kitnap_use_ai(KitnapScreenshot "$<TARGET_FILE_DIR:KitnapScreenshot>/Resources" WITH_MODELS)
     target_compile_definitions(KitnapScreenshot PRIVATE ${KITNAP_DEFINITIONS} JucePlugin_Name="KITNAP"

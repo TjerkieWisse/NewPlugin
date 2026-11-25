@@ -130,4 +130,6 @@ training/drumsplit/         trains KITNAP's own drum split model (see its README
 
 ## License note
 
+The credits and licences of everything KITNAP uses (the AI models and their training data, ONNX Runtime, the fonts) are in `Resources/Credits.txt`: the **Credits** button in the plugin shows them, and the installers put a copy, `KITNAP-Credits.txt`, next to the AI models, with ONNX Runtime's own third-party notices (`ONNXRuntime-ThirdPartyNotices.txt`). Keep it up to date when something is added.
+
 KITNAP is built with [JUCE](https://juce.com). JUCE is dual-licensed: AGPLv3, or a commercial JUCE licence (including a free tier for small developers). Check the current terms at juce.com before selling KITNAP or releasing it closed-source.

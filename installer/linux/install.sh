@@ -12,7 +12,8 @@ cp -R "$here/Standalone" ~/.local/share/kitnap/
 ln -sf ~/.local/share/kitnap/Standalone/KITNAP ~/.local/bin/kitnap
 mkdir -p ~/.config/KITNAP
 rm -f ~/.config/KITNAP/kitnap_drums.onnx ~/.config/KITNAP/kitnap_drumsep.onnx ~/.config/KITNAP/kitnap_drums_sw.onnx # models older versions used
-for file in "$here"/kitnap_drums_4stem.onnx "$here"/kitnap_drumsep5.onnx "$here"/libonnxruntime.so.*; do
+for file in "$here"/kitnap_drums_4stem.onnx "$here"/kitnap_drumsep5.onnx "$here"/libonnxruntime.so.* \
+            "$here"/KITNAP-Credits.txt "$here"/ONNXRuntime-ThirdPartyNotices.txt; do
     if [ -f "$file" ]; then cp "$file" ~/.config/KITNAP/; fi
 done
 

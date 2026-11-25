@@ -53,6 +53,7 @@ component app "$artefacts/Standalone/KITNAP.app" "/Applications"
 # The AI models and runtime are shared by the plugins and the app: /Library/Application Support/KITNAP.
 mkdir -p "$work/model-files/KITNAP"
 cp "$ai/kitnap_drums_4stem.onnx" "$ai/kitnap_drumsep5.onnx" "$work/model-files/KITNAP/"
+cp "$ai/KITNAP-Credits.txt" "$ai/ONNXRuntime-ThirdPartyNotices.txt" "$work/model-files/KITNAP/"
 cp "$artefacts"/VST3/KITNAP.vst3/Contents/Resources/libonnxruntime*.dylib "$work/model-files/KITNAP/"
 component models "$work/model-files/KITNAP" "/Library/Application Support" "$here/models-scripts"
 

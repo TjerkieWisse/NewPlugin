@@ -60,6 +60,9 @@ jobs:
 
       - name: Configure
         shell: bash
+        env:
+          # The drum split model is in this (private) repository's drumsplit-v2 release.
+          GH_TOKEN: ${{ github.token }}
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE="$(which python)"
           test -f build/kitnap-ai/kitnap_drums_4stem.onnx

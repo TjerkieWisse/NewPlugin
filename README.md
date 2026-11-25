@@ -64,7 +64,7 @@ The installers aren't code-signed yet, so the first launch shows a warning:
 - **Windows** (SmartScreen): click *More info → Run anyway*.
 - **macOS:** if the installer is blocked, open *System Settings → Privacy & Security* and click *Open Anyway* (on older macOS, right-click the `.pkg` and choose *Open*).
 
-Every push builds the Mac installer and plugins (Windows and Linux are switched off in `.github/workflows/build.yml` to save GitHub Actions minutes; uncomment them there to build those installers too); they're under *Artifacts* on each run in the **Actions** tab (GitHub login required, kept for 90 days). Pushing a version tag (`git tag v0.2.0 && git push origin v0.2.0`) publishes a Release with the three installers attached.
+Every push builds the Mac installer and plugins (Windows and Linux are switched off in `.github/workflows/build.yml` to save GitHub Actions minutes; uncomment them there to build those installers too); they're under *Artifacts* on each run in the **Actions** tab (GitHub login required, kept for 90 days). Pushing a version tag (`git tag v0.2.0 && git push origin v0.2.0`) publishes a Release with the three installers attached. The repository is private, so its Releases are only for you: buyers get the installer from the website or Polar.
 
 ### The AI files
 
@@ -72,7 +72,7 @@ The models (`kitnap_drums_4stem.onnx`, 236 MB, and `kitnap_drumsep5.onnx`, 247 M
 
 The models:
 - **Separation:** ZFTurbo's 4-stem BS-RoFormer (bass, drums, vocals, other), from his [Music-Source-Separation-Training](https://github.com/ZFTurbo/Music-Source-Separation-Training) releases (MIT, checksum verified), converted by `tools/export_drums.py`, drums only. Input and output `[1, 2, 1025, 401, 2]` (channel, bin, frame, real/imaginary; 2048-point FFT, hop 441).
-- **Drum split:** KITNAP's own model (MDX23C, 62M parameters), trained with `training/drumsplit` only on material that may be used commercially (see [its README](training/drumsplit/README.md#data-and-licences)). It's downloaded as ONNX from this repository's [`drumsplit-v2` release](https://github.com/TjerkieWisse/NewPlugin/releases/tag/drumsplit-v2) (the xlarge run at update 37926) (checksum verified); `training/drumsplit/export.py` makes it from a training run. Input `[1, 4, 1024, 512]` (2048-point FFT, hop 512), output `[1, 5, 4, 1024, 512]`: kick, snare, toms, hi-hat, cymbals.
+- **Drum split:** KITNAP's own model (MDX23C, 62M parameters), trained with `training/drumsplit` only on material that may be used commercially (see [its README](training/drumsplit/README.md#data-and-licences)). It's downloaded as ONNX from this (private) repository's [`drumsplit-v2` release](https://github.com/TjerkieWisse/NewPlugin/releases/tag/drumsplit-v2) (the xlarge run at update 37926) (checksum verified); `training/drumsplit/export.py` makes it from a training run. Input `[1, 4, 1024, 512]` (2048-point FFT, hop 512), output `[1, 5, 4, 1024, 512]`: kick, snare, toms, hi-hat, cymbals.
 
 **Licences and credits.** ZFTurbo's code and weights are MIT: KITNAP must include his copyright and licence notice. His model was trained on MUSDB18-HQ, whose licence is for non-commercial research; whether that affects a model trained on it is a question for a lawyer before selling. The drum split model's training data needs credit in KITNAP: the Groove MIDI Dataset (Google Magenta) and StemGMD (Politecnico di Milano), both CC BY 4.0.
 
@@ -106,7 +106,7 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release --parallel
 ```
 
-The plugins end up in `build/KITNAP_artefacts/Release/`. The build downloads ONNX Runtime 1.23.2 (from its GitHub release, or the identical build in Microsoft's NuGet package when that fails) and the models (checksums verified), copies the runtime into each plugin, and converts the separation model to ONNX, which needs Python with PyTorch (`pip install torch onnx onnxruntime numpy BS-RoFormer==0.4.1`); without it the build continues without it. The models land in `build/kitnap-ai/`: copy them into the shared folder above to use them with a self-built plugin. Pass `-DKITNAP_WITH_AI=OFF` to build without any AI, `-DKITNAP_WITH_DRUM_SPLIT=OFF` to skip downloading the split model, or `-DKITNAP_DRUMSEP_ONNX=<file>` to use another one (such as a newer training run's).
+The plugins end up in `build/KITNAP_artefacts/Release/`. The build downloads ONNX Runtime 1.23.2 (from its GitHub release, or the identical build in Microsoft's NuGet package when that fails) and the models (checksums verified), copies the runtime into each plugin, and converts the separation model to ONNX, which needs Python with PyTorch (`pip install torch onnx onnxruntime numpy BS-RoFormer==0.4.1`); without it the build continues without it. The models land in `build/kitnap-ai/`: copy them into the shared folder above to use them with a self-built plugin. The repository is private, so the drum split model download needs a GitHub login: `export GH_TOKEN=$(gh auth token)` before configuring (GitHub Actions passes its own token). Pass `-DKITNAP_WITH_AI=OFF` to build without any AI, `-DKITNAP_WITH_DRUM_SPLIT=OFF` to skip downloading the split model, or `-DKITNAP_DRUMSEP_ONNX=<file>` to use another one (such as a newer training run's).
 
 ### Tests
 

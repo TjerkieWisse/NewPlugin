@@ -15,6 +15,41 @@ option(KITNAP_WITH_AI "Bundle ONNX Runtime and the AI drum separation model" ON)
 option(KITNAP_WITH_DRUM_SPLIT "Download the AI drum split model" ON)
 option(KITNAP_BUILD_SCREENSHOT "Build the UI screenshot tool (Linux, needs a display)" OFF)
 
+# Licence keys, sold through Polar (polar.sh). Without an organization ID there is no licence check:
+# anyone can use the build. Set them here, or with -D when configuring.
+#   KITNAP_POLAR_ORGANIZATION_ID  the store's organization ID (Polar: Settings, General)
+#   KITNAP_POLAR_BENEFIT_ID       optional: the KITNAP licence key benefit, so other products' keys don't count
+#   KITNAP_POLAR_API              https://api.polar.sh, or https://sandbox-api.polar.sh to try with test keys
+#   KITNAP_BUY_URL                where "Buy KITNAP" goes (the website, or a Polar checkout link)
+#   KITNAP_ACCOUNT_URL            the buyers' Polar customer portal, where their key and computers are
+foreach(_setting IN ITEMS
+        "KITNAP_POLAR_ORGANIZATION_ID="
+        "KITNAP_POLAR_BENEFIT_ID="
+        "KITNAP_POLAR_API=https://api.polar.sh"
+        "KITNAP_BUY_URL="
+        "KITNAP_ACCOUNT_URL=")
+    string(FIND "${_setting}" "=" _eq)
+    string(SUBSTRING "${_setting}" 0 ${_eq} _name)
+    math(EXPR _eq "${_eq} + 1")
+    string(SUBSTRING "${_setting}" ${_eq} -1 _value)
+    if(NOT DEFINED ${_name})
+        set(${_name} "${_value}")
+    endif()
+endforeach()
+string(REPEAT "[0-9a-fA-F]" 4 _hex4) # (CMake's regular expressions can't count)
+set(_uuid "^${_hex4}${_hex4}-${_hex4}-${_hex4}-${_hex4}-${_hex4}${_hex4}${_hex4}$")
+foreach(_id IN ITEMS KITNAP_POLAR_ORGANIZATION_ID KITNAP_POLAR_BENEFIT_ID)
+    if(${_id} AND NOT ${_id} MATCHES "${_uuid}")
+        message(FATAL_ERROR "${_id} should look like 1dbfc517-0bbf-4301-9ba8-555ca42b9737, not \"${${_id}}\"")
+    endif()
+endforeach()
+configure_file(Source/licence/LicenceConfig.h.in "${CMAKE_BINARY_DIR}/generated/LicenceConfig.h" @ONLY)
+if(KITNAP_POLAR_ORGANIZATION_ID)
+    message(STATUS "KITNAP: licence keys from Polar organization ${KITNAP_POLAR_ORGANIZATION_ID} (${KITNAP_POLAR_API})")
+else()
+    message(STATUS "KITNAP: no licence check (KITNAP_POLAR_ORGANIZATION_ID is not set)")
+endif()
+
 # JUCE is downloaded automatically. Point KITNAP_JUCE_PATH at a local checkout to skip the download.
 set(KITNAP_JUCE_PATH "" CACHE PATH "Optional local JUCE checkout")
 
@@ -67,9 +102,11 @@ target_sources(KITNAP PRIVATE
     Source/engine/KitSampler.cpp
     Source/ui/WaveformView.cpp
     Source/ui/PadComponent.cpp
-    Source/ui/CreditsPanel.cpp)
+    Source/ui/CreditsPanel.cpp
+    Source/ui/LicencePanel.cpp
+    Source/licence/Licence.cpp)
 
-target_include_directories(KITNAP PRIVATE Source)
+target_include_directories(KITNAP PRIVATE Source "${CMAKE_BINARY_DIR}/generated")
 
 set(KITNAP_DEFINITIONS
     JUCE_WEB_BROWSER=0
@@ -77,6 +114,20 @@ set(KITNAP_DEFINITIONS
     JUCE_USE_MP3AUDIOFORMAT=1
     JUCE_USE_WINDOWS_MEDIA_FORMAT=1
     JUCE_VST3_CAN_REPLACE_VST2=0)
+
+# Checking licence keys needs HTTPS: the operating system's on Mac and Windows, libcurl on Linux
+# (loaded when needed, so it isn't a hard dependency).
+if(UNIX AND NOT APPLE AND KITNAP_POLAR_ORGANIZATION_ID)
+    find_package(CURL)
+    if(NOT CURL_FOUND)
+        message(FATAL_ERROR "Licence checks on Linux need the libcurl headers: sudo apt install libcurl4-openssl-dev")
+    endif()
+    list(REMOVE_ITEM KITNAP_DEFINITIONS JUCE_USE_CURL=0)
+    list(APPEND KITNAP_DEFINITIONS JUCE_USE_CURL=1 JUCE_LOAD_CURL_SYMBOLS_LAZILY=1)
+    # Every target here builds JUCE's network code.
+    target_include_directories(KITNAP PRIVATE ${CURL_INCLUDE_DIRS})
+    include_directories(${CURL_INCLUDE_DIRS})
+endif()
 
 # Sets up a target to use AI separation: ONNX Runtime headers, and the runtime copied to
 # `resources` (plus the models with WITH_MODELS).
@@ -118,6 +169,7 @@ target_link_libraries(KITNAP
     PRIVATE
         KitnapAssets
         juce::juce_audio_utils
+        juce::juce_cryptography
         juce::juce_dsp
     PUBLIC
         juce::juce_recommended_config_flags
@@ -143,6 +195,22 @@ if(KITNAP_BUILD_TESTS)
             juce::juce_recommended_warning_flags)
 endif()
 
+if(KITNAP_BUILD_TESTS)
+    # The licence logic against a pretend Polar (and, with --live, against the real one).
+    juce_add_console_app(KitnapLicenceTest PRODUCT_NAME "KitnapLicenceTest")
+    target_sources(KitnapLicenceTest PRIVATE tests/LicenceTest.cpp Source/licence/Licence.cpp)
+    target_include_directories(KitnapLicenceTest PRIVATE Source "${CMAKE_BINARY_DIR}/generated")
+    target_compile_definitions(KitnapLicenceTest PRIVATE ${KITNAP_DEFINITIONS})
+    target_link_libraries(KitnapLicenceTest
+        PRIVATE
+            juce::juce_core
+            juce::juce_events
+            juce::juce_cryptography
+        PUBLIC
+            juce::juce_recommended_config_flags
+            juce::juce_recommended_warning_flags)
+endif()
+
 if(KITNAP_BUILD_SCREENSHOT)
     juce_add_gui_app(KitnapScreenshot PRODUCT_NAME "KitnapScreenshot")
     target_sources(KitnapScreenshot PRIVATE
@@ -155,11 +223,13 @@ if(KITNAP_BUILD_SCREENSHOT)
         Source/engine/KitSampler.cpp
         Source/ui/WaveformView.cpp
         Source/ui/PadComponent.cpp
-        Source/ui/CreditsPanel.cpp)
-    target_include_directories(KitnapScreenshot PRIVATE Source)
+        Source/ui/CreditsPanel.cpp
+        Source/ui/LicencePanel.cpp
+        Source/licence/Licence.cpp)
+    target_include_directories(KitnapScreenshot PRIVATE Source "${CMAKE_BINARY_DIR}/generated")
     kitnap_use_ai(KitnapScreenshot "$<TARGET_FILE_DIR:KitnapScreenshot>/Resources" WITH_MODELS)
     target_compile_definitions(KitnapScreenshot PRIVATE ${KITNAP_DEFINITIONS} JucePlugin_Name="KITNAP"
-        JUCE_STANDALONE_APPLICATION=1 JUCE_MODAL_LOOPS_PERMITTED=1)
-    target_link_libraries(KitnapScreenshot PRIVATE KitnapAssets juce::juce_audio_utils juce::juce_dsp
+        JUCE_STANDALONE_APPLICATION=1 JUCE_MODAL_LOOPS_PERMITTED=1 KITNAP_LICENCE_PREVIEW=1)
+    target_link_libraries(KitnapScreenshot PRIVATE KitnapAssets juce::juce_audio_utils juce::juce_cryptography juce::juce_dsp
         PUBLIC juce::juce_recommended_config_flags)
 endif()

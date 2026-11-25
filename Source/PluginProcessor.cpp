@@ -253,6 +253,9 @@ bool KitnapAudioProcessor::canLoad (const juce::File& file) const
 
 void KitnapAudioProcessor::loadFile (const juce::File& file)
 {
+    // Making a new kit needs the licence; kits already in a project always open and play.
+    if (! licence->canMakeKits())
+        return;
     startAnalysis (file, {});
 }
 

@@ -3,6 +3,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "PluginProcessor.h"
 #include "ui/CreditsPanel.h"
+#include "ui/LicencePanel.h"
 #include "ui/PadComponent.h"
 #include "ui/WaveformView.h"
 
@@ -37,6 +38,7 @@ private:
     void timerCallback() override;
     void refreshPads();
     void browseForFile();
+    bool licensedOrAsk();
     void exportKit();
     void dragPadOut (int pad);
     void paintBackground (juce::Graphics&);
@@ -47,11 +49,14 @@ private:
 
     WaveformView waveform;
     std::vector<std::unique_ptr<PadComponent>> pads;
-    juce::TextButton loadButton { "Load" }, exportButton { "Export kit" }, creditsButton { "Credits" };
+    juce::TextButton loadButton { "Load" }, exportButton { "Export kit" }, creditsButton { "Credits" },
+        licenceButton { "Licence" };
     juce::TooltipWindow tooltips { this };
     juce::Slider volume;
     juce::AudioProcessorValueTreeState::SliderAttachment volumeAttachment;
     CreditsPanel credits;
+    LicencePanel licencePanel;
+    juce::SharedResourcePointer<kitnap::LicenceService> licence;
     std::unique_ptr<juce::FileChooser> chooser;
     std::unique_ptr<juce::Drawable> logo;
     juce::Image background;

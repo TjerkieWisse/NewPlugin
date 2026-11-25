@@ -4,6 +4,7 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 #include "analysis/DrumAnalyzer.h"
 #include "engine/KitSampler.h"
+#include "licence/Licence.h"
 
 // Everything the editor shows about the current kit. Only touched on the message thread.
 struct KitState
@@ -91,6 +92,7 @@ private:
     void applySelectionToSampler();
     void retire (const kitnap::SamplePtr& sample);
 
+    juce::SharedResourcePointer<kitnap::LicenceService> licence;
     juce::AudioFormatManager formatManager;
     kitnap::KitSampler sampler;
     KitState kit;

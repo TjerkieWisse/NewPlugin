@@ -1,5 +1,6 @@
-// Renders the editor to PNGs: empty, mid-analysis, with a finished kit (pads just hit), at rest, and
-// with the credits open.
+// Renders the editor to PNGs: the licence panel (not activated, a failed try, activated), then empty,
+// mid-analysis, with a finished kit (pads just hit), at rest, and with the credits open. Built with
+// KITNAP_LICENCE_PREVIEW, so activating is only pretended.
 // Usage: KitnapScreenshot <audio-file> <output-folder>
 
 #include "PluginProcessor.h"
@@ -39,6 +40,22 @@ int main (int argc, char** argv)
     processor->prepareToPlay (44100.0, 512);
     std::unique_ptr<juce::AudioProcessorEditor> editor (processor->createEditor());
     pump (300);
+
+    // Not activated: the editor opens with the licence panel.
+    juce::SharedResourcePointer<kitnap::LicenceService> licence;
+    snap (*editor, out.getChildFile ("0-licence.png"));
+    licence->activate ("KITNAP-TEST"); // can't reach anyone in this build: shows the error
+    pump (100);
+    snap (*editor, out.getChildFile ("0-licence-error.png"));
+    processor->loadFile (audio);
+    std::cout << "Loading a song before activating: " << (processor->getKit().status == KitState::Status::empty ? "refused" : "STARTED")
+              << "\n";
+    licence->previewActivate ("****-E304DA", "Studio Mac");
+    pump (100);
+    snap (*editor, out.getChildFile ("0-licence-active.png"));
+    if (auto* panel = editor->findChildWithID ("licencePanel"))
+        panel->setVisible (false);
+    pump (100);
     snap (*editor, out.getChildFile ("1-empty.png"));
 
     processor->loadFile (audio);

@@ -10,7 +10,7 @@ Runs as VST3 (any DAW), AU (Logic, GarageBand) and as a standalone app.
 
 ## Using it
 
-1. Put KITNAP on an instrument track.
+1. Put KITNAP on an instrument track. The first time, paste the licence key from your purchase email and press **Activate** (see [Licence keys](#licence-keys)).
 2. Drop an audio file on the song card at the top, or click it to browse. WAV, AIFF, FLAC, MP3 and OGG all work.
 3. Watch the drums get kidnapped: the waveform fills with colour while the AI separates the drums from the rest of the song, splits them into kick, snare, toms, hi-hat and cymbals, and cuts out the sounds. A full song takes a few minutes; the kit is saved with your project, so this only happens once.
 4. Click a pad to hear it. Use ‹ › to flip through variations, for example when a track has two different snares, or on the cymbals pad its closed and open hi-hat, crash and ride. Each pad shows how many of the hits the AI heard sound like its current sound.
@@ -76,6 +76,27 @@ The models:
 
 **Licences and credits.** ZFTurbo's code and weights are MIT: KITNAP must include his copyright and licence notice. His model was trained on MUSDB18-HQ, whose licence is for non-commercial research; whether that affects a model trained on it is a question for a lawyer before selling. The drum split model's training data needs credit in KITNAP: the Groove MIDI Dataset (Google Magenta) and StemGMD (Politecnico di Milano), both CC BY 4.0.
 
+## Licence keys
+
+KITNAP is sold through [Polar](https://polar.sh), which emails each buyer a licence key. The key goes into KITNAP once per computer (**Activate**), and works on two computers. To move to another computer, deactivate it on the old one (**Licence → Deactivate this computer**), or in the buyer's Polar account, which lists their computers by name.
+
+- Making a new kit needs an activated licence. Kits already saved in a project always open, play and export, activated or not.
+- KITNAP checks the key with Polar about once a day while online, and keeps working offline for 30 days after the last check. After that it asks to go online once (**Check now**). A key that's refunded or turned off in Polar, or a computer deactivated in the account, stops working at the next check.
+- The activation is kept in `~/Library/Application Support/FortyVolts/KITNAP/licence.json` (Mac), `%LOCALAPPDATA%\FortyVolts\KITNAP\licence.json` (Windows) or `~/.config/FortyVolts/KITNAP/licence.json` (Linux), signed and tied to that computer: copied elsewhere or edited, it doesn't count.
+- KITNAP talks to Polar's public licence API (`/v1/customer-portal/license-keys/activate`, `validate`, `deactivate`), which needs no secret, so nothing in the plugin is secret. Like any plugin's copy protection, a determined cracker can patch it out; this keeps honest people honest.
+
+**Without a store set, a build has no licence check** (that's how it's built now). To switch it on:
+
+1. In Polar (try it first in the sandbox, [sandbox.polar.sh](https://sandbox.polar.sh), where payments are pretend), create the KITNAP product with a one-time price.
+2. Give it a **License keys** benefit: prefix `KITNAP`, activation limit **2**, customers allowed to deactivate their own activations, no expiry and no usage limit.
+3. Fill in the store details at the top of `CMakeLists.txt`, or pass them when configuring (`-DKITNAP_POLAR_ORGANIZATION_ID=...`):
+   - `KITNAP_POLAR_ORGANIZATION_ID`: the organization ID from Polar's settings (required).
+   - `KITNAP_POLAR_BENEFIT_ID`: the licence key benefit's ID (optional; then keys of the store's other products don't unlock KITNAP).
+   - `KITNAP_BUY_URL`: where **Buy KITNAP** goes (the website, or the product's Polar checkout link).
+   - `KITNAP_ACCOUNT_URL`: the buyers' customer portal (`https://polar.sh/<your-organization>/portal`), for **Find my key** and **Your computers**.
+   - `KITNAP_POLAR_API`: `https://api.polar.sh`, or `https://sandbox-api.polar.sh` for a sandbox test build.
+4. With a sandbox test purchase's key, `KitnapLicenceTest --live https://sandbox-api.polar.sh <organization-id> <key>` activates it on the real Polar, checks it and deactivates it again.
+
 ## Building it yourself
 
 You need CMake 3.22+ and a C++17 compiler (Xcode on macOS, Visual Studio 2022 on Windows). JUCE is downloaded automatically.
@@ -105,6 +126,8 @@ The plugins end up in `build/KITNAP_artefacts/Release/`. The build downloads ONN
 ./build/KitnapAnalyzerTest_artefacts/Release/KitnapAnalyzerTest --compare a.wav b.wav -40     # how far apart two stems are (fails above -40 dB)
 ```
 
+`KitnapLicenceTest` runs the licence logic against a pretend Polar: activating and each way it can fail (unknown key, both places taken, refunded, offline, a key for another product, expired), the stored licence (read back, copied to another computer, edited, another store), checking once a day, 30 days offline, the clock set back, a key turned off in Polar, and deactivating. With `--live <api> <organization-id> <key>` it does the real thing (see [Licence keys](#licence-keys)). On Linux, a build with a store set needs the libcurl headers (`sudo apt install libcurl4-openssl-dev`).
+
 On a Mac, `KITNAP_CPU_ONLY=1` runs the models on the CPU, `KITNAP_FORCE_GPU=1` on the GPU (without timing which is faster), and `KITNAP_ORT_LOG=1` shows ONNX Runtime's details (such as how much of each model Core ML takes on). CI separates and splits a few seconds of the synthetic beat both ways and checks the results match (GitHub's Mac runners have no real GPU, so there Core ML is slow and KITNAP picks the CPU by itself).
 
 On Linux, `-DKITNAP_BUILD_SCREENSHOT=ON` also builds `KitnapScreenshot`, which renders the UI to PNGs (run it under `xvfb-run`).
@@ -116,11 +139,12 @@ Source/
   analysis/DrumAnalyzer.*   finds the hits in each part, groups them, cuts out the sounds
   separation/DrumSeparator.* AI drum separation and drum split (ONNX Runtime, loaded at run time)
   engine/KitSampler.*       the 3-pad sampler (MIDI, voice handling)
-  ui/                       the song card/drop zone, pad tiles, the FortyVolts theme (fonts, colours, logo)
+  licence/Licence.*         licence keys with Polar: activate, check, deactivate, the stored activation
+  ui/                       the song card/drop zone, pad tiles, credits and licence panels, the FortyVolts theme
   PluginProcessor.*         loading, background analysis, saving with the project, export
   PluginEditor.*            the window
 Resources/                  fonts (Michroma, Geist, Geist Mono; SIL Open Font License) and the FortyVolts logo
-tests/                      analyzer test and screenshot tool
+tests/                      analyzer test, licence test and screenshot tool
 installer/                  Windows (Inno Setup), macOS (pkg) and Linux installers
 cmake/KitnapAI.cmake        downloads ONNX Runtime + models, converts the separation model, bundles the runtime
 tools/export_drums.py       converts ZFTurbo's 4-stem BS-RoFormer checkpoint to ONNX (drums only)

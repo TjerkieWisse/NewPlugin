@@ -100,6 +100,10 @@ KitnapAudioProcessorEditor::KitnapAudioProcessorEditor (KitnapAudioProcessor& p)
     creditsButton.setComponentID ("credits");
     creditsButton.onClick = [this] { credits.setVisible (true); };
     addAndMakeVisible (creditsButton);
+    licenceButton.setComponentID ("licence");
+    licenceButton.onClick = [this] { licencePanel.setVisible (true); };
+    addChildComponent (licenceButton);
+    licenceButton.setVisible (licence->enabled());
 
     // The volume knob, in the last tile; drag up or down, double-click to reset.
     volume.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
@@ -108,7 +112,9 @@ KitnapAudioProcessorEditor::KitnapAudioProcessorEditor (KitnapAudioProcessor& p)
     if (auto* param = processor.apvts.getParameter ("volume"))
         volume.setDoubleClickReturnValue (true, param->convertFrom0to1 (param->getDefaultValue()));
     addAndMakeVisible (volume);
-    addChildComponent (credits); // last, so it covers everything when shown
+    addChildComponent (credits); // last, so they cover everything when shown
+    addChildComponent (licencePanel);
+    licencePanel.setComponentID ("licencePanel");
 
     processor.addChangeListener (this);
     setSize (960, 640);
@@ -116,6 +122,9 @@ KitnapAudioProcessorEditor::KitnapAudioProcessorEditor (KitnapAudioProcessor& p)
     waveform.kitChanged();
     lastTick = juce::Time::getMillisecondCounterHiRes();
     startTimerHz (60);
+
+    // Not activated yet (or not checked for too long): say so straight away.
+    licencePanel.setVisible (! licence->canMakeKits());
 }
 
 KitnapAudioProcessorEditor::~KitnapAudioProcessorEditor()
@@ -166,6 +175,7 @@ void KitnapAudioProcessorEditor::paintBackground (juce::Graphics& g)
 void KitnapAudioProcessorEditor::resized()
 {
     background = {};
+    licenceButton.setBounds (544, 22, 84, 36);
     creditsButton.setBounds (636, 22, 84, 36);
     loadButton.setBounds (728, 22, 84, 36);
     exportButton.setBounds (820, 22, 116, 36);
@@ -176,6 +186,7 @@ void KitnapAudioProcessorEditor::resized()
         pads[(size_t) i]->setBounds (24 + i * 255, 332, 242, 284);
     volume.setBounds (volumeTile().getX() + 20, volumeTile().getY() + 84, 104, 104);
     credits.setBounds (getLocalBounds());
+    licencePanel.setBounds (getLocalBounds());
 }
 
 juce::Rectangle<int> KitnapAudioProcessorEditor::volumeTile() const
@@ -198,6 +209,8 @@ void KitnapAudioProcessorEditor::fileDragExit (const juce::StringArray&) { wavef
 void KitnapAudioProcessorEditor::filesDropped (const juce::StringArray& files, int, int)
 {
     waveform.setDragHover (false);
+    if (! licensedOrAsk())
+        return;
     for (auto& f : files)
         if (processor.canLoad (juce::File (f)))
         {
@@ -206,8 +219,20 @@ void KitnapAudioProcessorEditor::filesDropped (const juce::StringArray& files, i
         }
 }
 
+// Making a kit needs an activated licence: without one, show the licence panel instead.
+bool KitnapAudioProcessorEditor::licensedOrAsk()
+{
+    if (licence->canMakeKits())
+        return true;
+    credits.setVisible (false);
+    licencePanel.setVisible (true);
+    return false;
+}
+
 void KitnapAudioProcessorEditor::browseForFile()
 {
+    if (! licensedOrAsk())
+        return;
     chooser = std::make_unique<juce::FileChooser> ("Pick a song or drum loop", juce::File(), "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg");
     chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
                           [this] (const juce::FileChooser& fc)

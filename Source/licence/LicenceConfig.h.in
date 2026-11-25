@@ -1,0 +1,9 @@
+#pragma once
+
+// Made by CMake from Source/licence/LicenceConfig.h.in: the store details this build was made with.
+// An empty organization ID means no licence check.
+#define KITNAP_POLAR_ORGANIZATION_ID "@KITNAP_POLAR_ORGANIZATION_ID@"
+#define KITNAP_POLAR_BENEFIT_ID "@KITNAP_POLAR_BENEFIT_ID@"
+#define KITNAP_POLAR_API "@KITNAP_POLAR_API@"
+#define KITNAP_BUY_URL "@KITNAP_BUY_URL@"
+#define KITNAP_ACCOUNT_URL "@KITNAP_ACCOUNT_URL@"

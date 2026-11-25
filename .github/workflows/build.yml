@@ -17,13 +17,16 @@ jobs:
         #   - name: Windows
         #     os: windows-2022
         #     test: build/KitnapAnalyzerTest_artefacts/Release/KitnapAnalyzerTest.exe
+        #     licenceTest: build/KitnapLicenceTest_artefacts/Release/KitnapLicenceTest.exe
         #   - name: Linux
         #     os: ubuntu-22.04
         #     test: build/KitnapAnalyzerTest_artefacts/Release/KitnapAnalyzerTest
+        #     licenceTest: build/KitnapLicenceTest_artefacts/Release/KitnapLicenceTest
         include:
           - name: macOS
             os: macos-15
             test: build/KitnapAnalyzerTest_artefacts/Release/KitnapAnalyzerTest
+            licenceTest: build/KitnapLicenceTest_artefacts/Release/KitnapLicenceTest
 
     steps:
       - uses: actions/checkout@v4
@@ -37,7 +40,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libasound2-dev libfreetype-dev libfontconfig1-dev libx11-dev \
-            libxrandr-dev libxinerama-dev libxcursor-dev libxext-dev libxcomposite-dev libgl1-mesa-dev
+            libxrandr-dev libxinerama-dev libxcursor-dev libxext-dev libxcomposite-dev libgl1-mesa-dev \
+            libcurl4-openssl-dev
 
       # Converting the separation model to ONNX happens while configuring and needs PyTorch.
       - uses: actions/setup-python@v5
@@ -69,6 +73,10 @@ jobs:
       - name: Kit extraction test
         shell: bash
         run: ${{ matrix.test }}
+
+      - name: Licence test
+        shell: bash
+        run: ${{ matrix.licenceTest }}
 
       - name: AI test (separate, split, extract)
         shell: bash
